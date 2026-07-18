@@ -1,48 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Patch } from "@patchwave/schema";
+import { validatePatch } from "@patchwave/schema";
 import type { LoadedPatch } from "../src/load-patch.js";
 import { ReloadCoordinator } from "../src/reload.js";
 
 function loaded(label: string, frequency: number): LoadedPatch {
-  const patch: Patch = {
-    tempoBpm: 120,
-    modulators: [],
-    modulationRoutes: [],
-    devices: [
-      {
-        id: label,
-        type: "subtractiveSynth",
-        enabled: true,
-        baseFrequencyHz: frequency,
-        outputGain: 0.1,
-        oscillators: [
-          {
-            id: "osc",
-            waveform: "sine",
-            octave: 0,
-            semitone: 0,
-            detuneCents: 0,
-            level: 1,
-            sends: { filter: 1, insert: 0, direct: 0 },
-          },
-        ],
-        ampEnvelope: { attackSeconds: 0, decaySeconds: 0, sustain: 1, releaseSeconds: 0 },
-        filter: {
-          enabled: false,
-          mode: "lowpass",
-          cutoffHz: 20_000,
-          resonance: 0,
-          sends: { insert: 1, direct: 0 },
-        },
-        audioRateRoutes: [],
-      },
-    ],
-  };
+  const patch = validatePatch({
+    source: { frequencyHz: frequency, oscillators: [{ waveform: "sine" }] },
+  });
   return {
     patch,
     serialized: JSON.stringify(patch),
-    summary: `120 BPM; 0 modulators; 0 routes; subtractiveSynth#${label}`,
+    summary: `${label}: ${frequency} Hz`,
   };
 }
 

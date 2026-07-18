@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use patchwave_native::patch::{parse_patch, PATCH_JSON_MAX_BYTES};
+use patchwave_native::patch::{
+    parse_patch, EffectSpec, FilterMode, LfoShape, Waveform, PATCH_JSON_MAX_BYTES,
+};
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -33,6 +35,39 @@ fn accepts_all_shared_valid_fixtures() {
 }
 
 #[test]
+fn canonical_wobble_preserves_values_and_effect_order() {
+    let serialized =
+        fs::read_to_string(fixture_root().join("valid/wobble.json")).expect("read wobble fixture");
+    let patch = parse_patch(&serialized).expect("parse wobble fixture");
+
+    assert_eq!(patch.source.frequency_hz, 55.0);
+    assert_eq!(patch.source.gain_db, -14.0);
+    assert_eq!(patch.source.oscillators.len(), 3);
+    assert_eq!(patch.source.oscillators[0].waveform, Waveform::Saw);
+    assert_eq!(patch.source.oscillators[0].transpose_semitones, 12);
+    assert_eq!(patch.source.oscillators[1].detune_cents, 7.0);
+    assert_eq!(patch.source.oscillators[2].waveform, Waveform::Sine);
+
+    let filter = patch.source.filter.expect("source filter");
+    assert_eq!(filter.mode, FilterMode::Lowpass);
+    assert_eq!(filter.cutoff_hz, 220.0);
+    assert_eq!(filter.resonance, 0.7);
+    let lfo = filter.cutoff_lfo.expect("cutoff LFO");
+    assert_eq!(lfo.shape, LfoShape::Sine);
+    assert_eq!(lfo.rate_hz, 2.5);
+    assert_eq!(lfo.amount_octaves, 2.5);
+
+    assert!(matches!(patch.effects[0], EffectSpec::Saturator(_)));
+    assert!(matches!(patch.effects[1], EffectSpec::StereoDelay(_)));
+    let EffectSpec::StereoDelay(delay) = patch.effects[1] else {
+        unreachable!()
+    };
+    assert_eq!(delay.time_seconds, 0.095);
+    assert_eq!(delay.feedback, 0.2);
+    assert!(delay.ping_pong);
+}
+
+#[test]
 fn rejects_all_shared_invalid_fixtures() {
     for path in fixture_files("invalid") {
         let serialized = fs::read_to_string(&path).expect("read invalid fixture");
@@ -46,7 +81,7 @@ fn rejects_all_shared_invalid_fixtures() {
 
 #[test]
 fn rejects_malformed_json() {
-    assert!(parse_patch("{\"tempoBpm\":120,").is_err());
+    assert!(parse_patch("{\"source\":").is_err());
 }
 
 #[test]

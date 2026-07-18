@@ -1,53 +1,24 @@
 {
-  "devices": [
+  "source": {
+    "frequencyHz": 110,
+    "gainDb": -12,
+    "oscillators": [{ "waveform": "saw", "transposeSemitones": 0, "detuneCents": 0, "level": 1 }],
+    "filter": null,
+    "ampEnvelope": {
+      "attackSeconds": 0.005,
+      "decaySeconds": 0,
+      "sustain": 1,
+      "releaseSeconds": 0.1
+    }
+  },
+  "effects": [
     {
-      "id": "synth",
-      "type": "subtractiveSynth",
-      "enabled": true,
-      "baseFrequencyHz": 440,
-      "outputGain": 0.1,
-      "oscillators": [
-        {
-          "id": "osc1",
-          "waveform": "noise",
-          "level": 0.1,
-          "sends": {
-            "filter": 1,
-            "insert": 0,
-            "direct": 0
-          }
-        }
-      ],
-      "ampEnvelope": {
-        "attackSeconds": 0,
-        "decaySeconds": 0,
-        "sustain": 1,
-        "releaseSeconds": 0
-      },
-      "filter": {
-        "enabled": false,
-        "mode": "lowpass",
-        "cutoffHz": 20000,
-        "resonance": 0,
-        "sends": {
-          "insert": 1,
-          "direct": 0
-        }
-      },
-      "audioRateRoutes": []
-    },
-    {
-      "id": "delay",
       "type": "stereoDelay",
-      "enabled": true,
-      "timeMs": 10,
+      "timeSeconds": 0.1,
       "feedback": 0.951,
       "damping": 0,
       "pingPong": false,
-      "mix": 0
+      "mix": 0.2
     }
-  ],
-  "tempoBpm": 120,
-  "modulators": [],
-  "modulationRoutes": []
+  ]
 }

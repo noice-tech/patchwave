@@ -11,5 +11,14 @@
       "releaseSeconds": 0.1
     }
   },
-  "effects": []
+  "effects": [
+    {
+      "type": "stereoDelay",
+      "timeSeconds": 2.1,
+      "feedback": 0,
+      "damping": 0,
+      "pingPong": false,
+      "mix": 1
+    }
+  ]
 }

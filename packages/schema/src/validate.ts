@@ -1,545 +1,357 @@
-import {
-  DEVICE_COUNT_MAX,
-  DEVICE_COUNT_MIN,
-  DEVICE_ID_PATTERN,
-  LIMITS,
-  V2_MODULATOR_COUNT_MAX,
-  V2_OSCILLATOR_COUNT_MAX,
-  V2_ROUTE_COUNT_MAX,
-} from "./limits.js";
+import { EFFECT_COUNT_MAX, LIMITS, OSCILLATOR_COUNT_MAX } from "./limits.js";
 import type {
-  AudioProcessor,
-  Envelope,
-  ModulationRouteV2,
-  ModulatorV2,
-  OscillatorV2,
-  Patch,
-  PhaseModulationRouteV2,
-  Saturator,
-  StereoDelay,
-  SubtractiveSynthV2,
-  SynthFilterV2,
+  CanonicalCutoffLfo,
+  CanonicalEffect,
+  CanonicalEnvelope,
+  CanonicalOscillator,
+  CanonicalPatch,
+  CanonicalSourceFilter,
 } from "./types.js";
 
 type DataRecord = Record<string, unknown>;
+type Limits = readonly [number, number];
 
-export function validatePatch(value: unknown): Patch {
-  const patch = readObject(value, "patch", [
-    "tempoBpm",
-    "modulators",
-    "modulationRoutes",
-    "devices",
-  ]);
-  const tempoBpm = readNumber(patch, "tempoBpm", "patch", LIMITS.tempoBpm);
-  const modValues = readArray(
-    readData(patch, "modulators", "modulators"),
-    "modulators",
-    0,
-    V2_MODULATOR_COUNT_MAX,
-  );
-  const modulators = modValues.map((x, i) => validateModulator(x, `modulators[${i}]`));
-  uniqueIds(modulators, "modulators");
-  const deviceValues = readArray(
-    readData(patch, "devices", "devices"),
-    "devices",
-    DEVICE_COUNT_MIN,
-    DEVICE_COUNT_MAX,
-  );
-  const source = validateSynthV2(deviceValues[0], "devices[0]");
-  const devices: [SubtractiveSynthV2, ...AudioProcessor[]] = [source];
-  const ids = new Set([source.id]);
-  for (let i = 1; i < deviceValues.length; i++) {
-    const device = validateProcessor(deviceValues[i], `devices[${i}]`);
-    if (ids.has(device.id)) throw new Error(`devices[${i}].id must be unique`);
-    ids.add(device.id);
-    devices.push(device);
-  }
-  const routeValues = readArray(
-    readData(patch, "modulationRoutes", "modulationRoutes"),
-    "modulationRoutes",
-    0,
-    V2_ROUTE_COUNT_MAX,
-  );
-  const routes = routeValues.map((x, i) => validateRoute(x, `modulationRoutes[${i}]`));
-  resolveRoutes(routes, modulators, source);
-  routes.sort((a, b) => compareAscii(routeKey(a), routeKey(b)));
-  resolvePm(source);
-  return { tempoBpm, modulators, modulationRoutes: routes, devices };
+const DEFAULT_ENVELOPE: CanonicalEnvelope = {
+  attackSeconds: 0.005,
+  decaySeconds: 0,
+  sustain: 1,
+  releaseSeconds: 0.1,
+};
+
+export function validatePatch(value: unknown): CanonicalPatch {
+  const patch = readObject(value, "patch", ["source", "effects"], ["source"]);
+  const source = validateSource(readData(patch, "source", "patch.source"));
+  const effects = hasOwn(patch, "effects")
+    ? readArray(
+        readData(patch, "effects", "patch.effects"),
+        "patch.effects",
+        0,
+        EFFECT_COUNT_MAX,
+      ).map((effect, index) => validateEffect(effect, `patch.effects[${index}]`))
+    : [];
+  return { source, effects };
 }
 
-function validateSynthV2(value: unknown, path: string): SubtractiveSynthV2 {
-  const object = readObject(value, path, [
-    "id",
-    "type",
-    "enabled",
-    "baseFrequencyHz",
-    "outputGain",
-    "oscillators",
-    "ampEnvelope",
-    "filter",
-    "audioRateRoutes",
-  ]);
-  expectLiteral(readData(object, "type", `${path}.type`), "subtractiveSynth", `${path}.type`);
+function validateSource(value: unknown): CanonicalPatch["source"] {
+  const path = "patch.source";
+  const source = readObject(
+    value,
+    path,
+    ["frequencyHz", "gainDb", "oscillators", "filter", "ampEnvelope"],
+    ["frequencyHz", "oscillators"],
+  );
   const values = readArray(
-    readData(object, "oscillators", `${path}.oscillators`),
+    readData(source, "oscillators", `${path}.oscillators`),
     `${path}.oscillators`,
     1,
-    V2_OSCILLATOR_COUNT_MAX,
+    OSCILLATOR_COUNT_MAX,
   );
-  const oscs = values.map((x, i) => validateOscillatorV2(x, `${path}.oscillators[${i}]`));
-  uniqueIds(oscs, `${path}.oscillators`);
-  const pmValues = readArray(
-    readData(object, "audioRateRoutes", `${path}.audioRateRoutes`),
-    `${path}.audioRateRoutes`,
-    0,
-    1,
-  );
-  const audioRateRoutes = pmValues.map((x, i) => validatePm(x, `${path}.audioRateRoutes[${i}]`)) as
-    | []
-    | [PhaseModulationRouteV2];
+  const oscillators = values.map((oscillator, index) =>
+    validateOscillator(oscillator, `${path}.oscillators[${index}]`),
+  ) as CanonicalPatch["source"]["oscillators"];
   return {
-    id: readId(object, path),
-    type: "subtractiveSynth",
-    enabled: readBoolean(object, "enabled", path),
-    baseFrequencyHz: readNumber(object, "baseFrequencyHz", path, LIMITS.baseFrequencyHz),
-    outputGain: readNumber(object, "outputGain", path, LIMITS.normalized),
-    oscillators: oscs as SubtractiveSynthV2["oscillators"],
-    ampEnvelope: validateEnvelope(
-      readData(object, "ampEnvelope", `${path}.ampEnvelope`),
-      `${path}.ampEnvelope`,
-    ),
-    filter: validateFilterV2(readData(object, "filter", `${path}.filter`), `${path}.filter`),
-    audioRateRoutes,
+    frequencyHz: readNumber(source, "frequencyHz", path, LIMITS.frequencyHz),
+    gainDb: optionalNumber(source, "gainDb", path, LIMITS.sourceGainDb, -12),
+    oscillators,
+    filter: hasOwn(source, "filter")
+      ? validateFilter(readData(source, "filter", `${path}.filter`), `${path}.filter`)
+      : null,
+    ampEnvelope: hasOwn(source, "ampEnvelope")
+      ? validateEnvelope(
+          readData(source, "ampEnvelope", `${path}.ampEnvelope`),
+          `${path}.ampEnvelope`,
+        )
+      : { ...DEFAULT_ENVELOPE },
   };
 }
 
-function validateEnvelope(value: unknown, path: string): Envelope {
-  const o = readObject(value, path, ["attackSeconds", "decaySeconds", "sustain", "releaseSeconds"]);
-  return {
-    attackSeconds: readNumber(o, "attackSeconds", path, LIMITS.envelopeSeconds),
-    decaySeconds: readNumber(o, "decaySeconds", path, LIMITS.envelopeSeconds),
-    sustain: readNumber(o, "sustain", path, LIMITS.normalized),
-    releaseSeconds: readNumber(o, "releaseSeconds", path, LIMITS.envelopeSeconds),
-  };
-}
-function validateFilterV2(value: unknown, path: string): SynthFilterV2 {
-  const o = readObject(value, path, ["enabled", "mode", "cutoffHz", "resonance", "sends"]);
-  const sends = readObject(readData(o, "sends", `${path}.sends`), `${path}.sends`, [
-    "insert",
-    "direct",
-  ]);
-  return {
-    enabled: readBoolean(o, "enabled", path),
-    mode: readMode(o, path),
-    cutoffHz: readNumber(o, "cutoffHz", path, LIMITS.cutoffHz),
-    resonance: readNumber(o, "resonance", path, LIMITS.normalized),
-    sends: {
-      insert: readNumber(sends, "insert", `${path}.sends`, LIMITS.normalized),
-      direct: readNumber(sends, "direct", `${path}.sends`, LIMITS.normalized),
-    },
-  };
-}
-function readMode(o: DataRecord, path: string): "lowpass" | "bandpass" | "highpass" {
-  const m = readData(o, "mode", `${path}.mode`);
-  if (m !== "lowpass" && m !== "bandpass" && m !== "highpass")
-    throw new Error(`${path}.mode must be lowpass, bandpass, or highpass`);
-  return m;
-}
-
-function validateOscillatorV2(value: unknown, path: string): OscillatorV2 {
-  const o = readObjectForDiscriminant(value, path);
-  const w = readData(o, "waveform", `${path}.waveform`);
-  const base = ["id", "waveform", "level", "sends"];
-  if (w === "noise") {
-    const n = readObject(value, path, base);
+function validateOscillator(value: unknown, path: string): CanonicalOscillator {
+  const discriminant = readObjectForDiscriminant(value, path);
+  const waveform = readData(discriminant, "waveform", `${path}.waveform`);
+  if (waveform === "noise") {
+    const oscillator = readObject(value, path, ["waveform", "level"], ["waveform"]);
     return {
-      id: readId(n, path),
-      waveform: "noise",
-      level: readNumber(n, "level", path, LIMITS.normalized),
-      sends: validateSends(readData(n, "sends", `${path}.sends`), `${path}.sends`),
+      waveform,
+      level: optionalNumber(oscillator, "level", path, LIMITS.normalized, 1),
     };
   }
-  const keys = [
-    "id",
-    "waveform",
-    "octave",
-    "semitone",
-    "detuneCents",
-    ...(w === "pulse" ? ["pulseWidth"] : []),
-    "level",
-    "sends",
-  ];
-  if (w !== "sine" && w !== "triangle" && w !== "saw" && w !== "pulse")
+  if (
+    waveform !== "sine" &&
+    waveform !== "triangle" &&
+    waveform !== "saw" &&
+    waveform !== "pulse"
+  ) {
     throw new Error(`${path}.waveform is unsupported`);
-  const t = readObject(value, path, keys);
-  const id = readId(t, path);
-  const tuning = readTuning(t, path);
-  const level = readNumber(t, "level", path, LIMITS.normalized);
-  const sends = validateSends(readData(t, "sends", `${path}.sends`), `${path}.sends`);
-  return w === "pulse"
+  }
+  const allowed = [
+    "waveform",
+    "transposeSemitones",
+    "detuneCents",
+    ...(waveform === "pulse" ? ["pulseWidth"] : []),
+    "level",
+  ];
+  const oscillator = readObject(value, path, allowed, ["waveform"]);
+  const tuning = {
+    transposeSemitones: optionalInteger(
+      oscillator,
+      "transposeSemitones",
+      path,
+      LIMITS.transposeSemitones,
+      0,
+    ),
+    detuneCents: optionalNumber(oscillator, "detuneCents", path, LIMITS.detuneCents, 0),
+  };
+  const level = optionalNumber(oscillator, "level", path, LIMITS.normalized, 1);
+  return waveform === "pulse"
     ? {
-        id,
-        waveform: "pulse",
+        waveform,
         ...tuning,
-        pulseWidth: readNumber(t, "pulseWidth", path, LIMITS.pulseWidth),
+        pulseWidth: optionalNumber(oscillator, "pulseWidth", path, LIMITS.pulseWidth, 0.5),
         level,
-        sends,
       }
-    : { id, waveform: w, ...tuning, level, sends };
-}
-function validateSends(value: unknown, path: string) {
-  const o = readObject(value, path, ["filter", "insert", "direct"]);
-  return {
-    filter: readNumber(o, "filter", path, LIMITS.normalized),
-    insert: readNumber(o, "insert", path, LIMITS.normalized),
-    direct: readNumber(o, "direct", path, LIMITS.normalized),
-  };
+    : { waveform, ...tuning, level };
 }
 
-function validateModulator(value: unknown, path: string): ModulatorV2 {
-  const d = readObjectForDiscriminant(value, path);
-  const type = readData(d, "type", `${path}.type`);
-  if (type === "envelope") {
-    const o = readObject(value, path, [
-      "id",
-      "type",
-      "enabled",
-      "attackSeconds",
-      "decaySeconds",
-      "sustain",
-      "releaseSeconds",
-    ]);
-    const e = validateEnvelopeFields(o, path);
-    return { id: readId(o, path), type, enabled: readBoolean(o, "enabled", path), ...e };
-  }
-  if (type !== "lfo") throw new Error(`${path}.type is unsupported`);
-  const o = readObject(value, path, [
-    "id",
-    "type",
-    "enabled",
-    "shape",
-    "polarity",
-    "rate",
-    "phaseMode",
-    "phaseOffset",
-  ]);
-  const shape = readEnum(o, "shape", path, [
-    "sine",
-    "triangle",
-    "sawUp",
-    "sawDown",
-    "square",
-  ] as const);
-  const polarity = readEnum(o, "polarity", path, ["unipolar", "bipolar"] as const);
-  const phaseMode = readEnum(o, "phaseMode", path, ["free", "gateReset"] as const);
-  const phaseOffset = readNumber(o, "phaseOffset", path, [0, 1]);
-  if (phaseOffset >= 1) throw new Error(`${path}.phaseOffset must be < 1`);
-  const rateAny = readObjectForDiscriminant(readData(o, "rate", `${path}.rate`), `${path}.rate`);
-  const mode = readData(rateAny, "mode", `${path}.rate.mode`);
-  const rate =
-    mode === "hz"
-      ? (() => {
-          const r = readObject(rateAny, `${path}.rate`, ["mode", "frequencyHz"]);
-          return {
-            mode: "hz" as const,
-            frequencyHz: readNumber(r, "frequencyHz", `${path}.rate`, LIMITS.lfoFrequencyHz),
-          };
-        })()
-      : mode === "sync"
-        ? (() => {
-            const r = readObject(rateAny, `${path}.rate`, ["mode", "division"]);
-            return {
-              mode: "sync" as const,
-              division: readEnum(r, "division", `${path}.rate`, [
-                "1/1",
-                "1/2",
-                "1/4",
-                "1/8",
-                "1/16",
-              ] as const),
-            };
-          })()
-        : (() => {
-            throw new Error(`${path}.rate.mode is unsupported`);
-          })();
-  return {
-    id: readId(o, path),
-    type,
-    enabled: readBoolean(o, "enabled", path),
-    shape,
-    polarity,
-    rate,
-    phaseMode,
-    phaseOffset,
-  };
-}
-function validateEnvelopeFields(o: DataRecord, path: string) {
-  return {
-    attackSeconds: readNumber(o, "attackSeconds", path, LIMITS.envelopeSeconds),
-    decaySeconds: readNumber(o, "decaySeconds", path, LIMITS.envelopeSeconds),
-    sustain: readNumber(o, "sustain", path, LIMITS.normalized),
-    releaseSeconds: readNumber(o, "releaseSeconds", path, LIMITS.envelopeSeconds),
-  };
-}
-
-function validateRoute(value: unknown, path: string): ModulationRouteV2 {
-  const o = readObjectForDiscriminant(value, path);
-  const targetAny = readObjectForDiscriminant(
-    readData(o, "target", `${path}.target`),
-    `${path}.target`,
+function validateFilter(value: unknown, path: string): CanonicalSourceFilter {
+  const filter = readObject(
+    value,
+    path,
+    ["mode", "cutoffHz", "resonance", "cutoffLfo"],
+    ["cutoffHz"],
   );
-  const type = readData(targetAny, "type", `${path}.target.type`);
-  const source = (() => {
-    const v = readData(o, "source", `${path}.source`);
-    if (typeof v !== "string" || !DEVICE_ID_PATTERN.test(v))
-      throw new Error(`${path}.source is invalid`);
-    return v;
-  })();
-  if (type === "filterCutoff") {
-    const full = readObject(value, path, ["source", "target", "amountOctaves"]);
-    const t = readObject(targetAny, `${path}.target`, ["type", "device"]);
-    return {
-      source,
-      target: { type: "filterCutoff", device: readRef(t, "device", `${path}.target`) },
-      amountOctaves: readNumber(full, "amountOctaves", path, LIMITS.amountOctaves),
-    };
-  }
-  if (type === "sourceGain") {
-    const full = readObject(value, path, ["source", "target", "amountDb"]);
-    const t = readObject(targetAny, `${path}.target`, ["type", "device"]);
-    return {
-      source,
-      target: { type: "sourceGain", device: readRef(t, "device", `${path}.target`) },
-      amountDb: readNumber(full, "amountDb", path, LIMITS.amountDb),
-    };
-  }
-  if (type === "oscillatorPitch" || type === "pulseWidth" || type === "oscillatorLevel") {
-    const expected = type === "oscillatorPitch" ? "amountSemitones" : "amount";
-    const full = readObject(value, path, ["source", "target", expected]);
-    const t = readObject(targetAny, `${path}.target`, ["type", "device", "oscillator"]);
-    const device = readRef(t, "device", `${path}.target`);
-    const oscillator = readRef(t, "oscillator", `${path}.target`);
-    if (type === "oscillatorPitch")
-      return {
-        source,
-        target: { type, device, oscillator },
-        amountSemitones: readNumber(full, expected, path, LIMITS.amountSemitones),
-      };
-    if (type === "pulseWidth")
-      return {
-        source,
-        target: { type, device, oscillator },
-        amount: readNumber(full, expected, path, LIMITS.signedNormalized),
-      };
-    return {
-      source,
-      target: { type, device, oscillator },
-      amount: readNumber(full, expected, path, LIMITS.signedNormalized),
-    };
-  }
-  throw new Error(`${path}.target.type is unsupported`);
-}
-function validatePm(value: unknown, path: string): PhaseModulationRouteV2 {
-  const o = readObject(value, path, ["type", "source", "target", "indexRadians"]);
-  expectLiteral(readData(o, "type", `${path}.type`), "phaseModulation", `${path}.type`);
   return {
-    type: "phaseModulation",
-    source: readRef(o, "source", path),
-    target: readRef(o, "target", path),
-    indexRadians: readNumber(o, "indexRadians", path, LIMITS.pmIndex),
+    mode: optionalEnum(
+      filter,
+      "mode",
+      path,
+      ["lowpass", "bandpass", "highpass"] as const,
+      "lowpass",
+    ),
+    cutoffHz: readNumber(filter, "cutoffHz", path, LIMITS.cutoffHz),
+    resonance: optionalNumber(filter, "resonance", path, LIMITS.normalized, 0),
+    cutoffLfo: hasOwn(filter, "cutoffLfo")
+      ? validateCutoffLfo(readData(filter, "cutoffLfo", `${path}.cutoffLfo`), `${path}.cutoffLfo`)
+      : null,
   };
 }
-function resolveRoutes(
-  routes: ModulationRouteV2[],
-  mods: ModulatorV2[],
-  synth: SubtractiveSynthV2,
-) {
-  const mids = new Set(mods.map((x) => x.id));
-  const seen = new Set<string>();
-  for (const r of routes) {
-    if (!mids.has(r.source)) throw new Error(`modulation route source ${r.source} is unknown`);
-    if (r.target.device !== synth.id)
-      throw new Error(`modulation route device ${r.target.device} is unknown`);
-    const key = routeKey(r);
-    if (seen.has(key)) throw new Error("modulation routes must have unique source/target identity");
-    seen.add(key);
-    if ("oscillator" in r.target) {
-      const oscillatorId = r.target.oscillator;
-      const osc = synth.oscillators.find((x) => x.id === oscillatorId);
-      if (!osc) throw new Error(`modulation route oscillator ${oscillatorId} is unknown`);
-      if (r.target.type === "oscillatorPitch" && osc.waveform === "noise")
-        throw new Error("oscillatorPitch target must be tonal");
-      if (r.target.type === "pulseWidth" && osc.waveform !== "pulse")
-        throw new Error("pulseWidth target must be pulse");
-    }
-  }
-}
-function resolvePm(synth: SubtractiveSynthV2) {
-  const pm = synth.audioRateRoutes[0];
-  if (!pm) return;
-  const source = synth.oscillators.find((x) => x.id === pm.source);
-  const target = synth.oscillators.find((x) => x.id === pm.target);
-  if (!source || !target) throw new Error("phase modulation endpoint is unknown");
-  if (source.id === target.id) throw new Error("phase modulation source and target must differ");
-  if (source.waveform !== "sine" || target.waveform !== "sine")
-    throw new Error("phase modulation endpoints must be sine");
-}
-function routeKey(r: ModulationRouteV2) {
-  return `${r.source}\u0000${r.target.type}\u0000${r.target.device}\u0000${"oscillator" in r.target ? r.target.oscillator : ""}`;
-}
-function compareAscii(a: string, b: string) {
-  return a < b ? -1 : a > b ? 1 : 0;
+
+function validateCutoffLfo(value: unknown, path: string): CanonicalCutoffLfo {
+  const lfo = readObject(
+    value,
+    path,
+    ["shape", "rateHz", "amountOctaves"],
+    ["rateHz", "amountOctaves"],
+  );
+  return {
+    shape: optionalEnum(
+      lfo,
+      "shape",
+      path,
+      ["sine", "triangle", "sawUp", "sawDown", "square"] as const,
+      "sine",
+    ),
+    rateHz: readNumber(lfo, "rateHz", path, LIMITS.lfoFrequencyHz),
+    amountOctaves: readNumber(lfo, "amountOctaves", path, LIMITS.amountOctaves),
+  };
 }
 
-function validateProcessor(value: unknown, path: string): AudioProcessor {
-  const o = readObjectForDiscriminant(value, path);
-  const t = readData(o, "type", `${path}.type`);
-  if (t === "saturator") return validateSaturator(value, path);
-  if (t === "stereoDelay") return validateDelay(value, path);
-  if (t === "subtractiveSynth") throw new Error(`${path}.type must be an audio processor`);
+function validateEnvelope(value: unknown, path: string): CanonicalEnvelope {
+  const envelope = readObject(
+    value,
+    path,
+    ["attackSeconds", "decaySeconds", "sustain", "releaseSeconds"],
+    [],
+  );
+  return {
+    attackSeconds: optionalNumber(
+      envelope,
+      "attackSeconds",
+      path,
+      LIMITS.envelopeSeconds,
+      DEFAULT_ENVELOPE.attackSeconds,
+    ),
+    decaySeconds: optionalNumber(
+      envelope,
+      "decaySeconds",
+      path,
+      LIMITS.envelopeSeconds,
+      DEFAULT_ENVELOPE.decaySeconds,
+    ),
+    sustain: optionalNumber(envelope, "sustain", path, LIMITS.normalized, DEFAULT_ENVELOPE.sustain),
+    releaseSeconds: optionalNumber(
+      envelope,
+      "releaseSeconds",
+      path,
+      LIMITS.envelopeSeconds,
+      DEFAULT_ENVELOPE.releaseSeconds,
+    ),
+  };
+}
+
+function validateEffect(value: unknown, path: string): CanonicalEffect {
+  const discriminant = readObjectForDiscriminant(value, path);
+  const type = readData(discriminant, "type", `${path}.type`);
+  if (type === "saturator") {
+    const effect = readObject(
+      value,
+      path,
+      ["type", "driveDb", "outputGainDb", "mix"],
+      ["type", "driveDb"],
+    );
+    return {
+      type,
+      driveDb: readNumber(effect, "driveDb", path, LIMITS.driveDb),
+      outputGainDb: optionalNumber(effect, "outputGainDb", path, LIMITS.outputGainDb, 0),
+      mix: optionalNumber(effect, "mix", path, LIMITS.normalized, 1),
+    };
+  }
+  if (type === "stereoDelay") {
+    const effect = readObject(
+      value,
+      path,
+      ["type", "timeSeconds", "feedback", "damping", "pingPong", "mix"],
+      ["type", "timeSeconds", "mix"],
+    );
+    return {
+      type,
+      timeSeconds: readNumber(effect, "timeSeconds", path, LIMITS.delayTimeSeconds),
+      feedback: optionalNumber(effect, "feedback", path, LIMITS.feedback, 0),
+      damping: optionalNumber(effect, "damping", path, LIMITS.normalized, 0),
+      pingPong: optionalBoolean(effect, "pingPong", path, false),
+      mix: readNumber(effect, "mix", path, LIMITS.normalized),
+    };
+  }
   throw new Error(`${path}.type is unsupported`);
 }
-function validateSaturator(value: unknown, path: string): Saturator {
-  const o = readObject(value, path, ["id", "type", "enabled", "driveDb", "outputGainDb", "mix"]);
-  return {
-    id: readId(o, path),
-    type: "saturator",
-    enabled: readBoolean(o, "enabled", path),
-    driveDb: readNumber(o, "driveDb", path, LIMITS.driveDb),
-    outputGainDb: readNumber(o, "outputGainDb", path, LIMITS.outputGainDb),
-    mix: readNumber(o, "mix", path, LIMITS.normalized),
-  };
-}
-function validateDelay(value: unknown, path: string): StereoDelay {
-  const o = readObject(value, path, [
-    "id",
-    "type",
-    "enabled",
-    "timeMs",
-    "feedback",
-    "damping",
-    "pingPong",
-    "mix",
-  ]);
-  return {
-    id: readId(o, path),
-    type: "stereoDelay",
-    enabled: readBoolean(o, "enabled", path),
-    timeMs: readNumber(o, "timeMs", path, LIMITS.delayTimeMs),
-    feedback: readNumber(o, "feedback", path, LIMITS.feedback),
-    damping: readNumber(o, "damping", path, LIMITS.normalized),
-    pingPong: readBoolean(o, "pingPong", path),
-    mix: readNumber(o, "mix", path, LIMITS.normalized),
-  };
-}
 
-function readTuning(o: DataRecord, path: string) {
-  return {
-    octave: readInteger(o, "octave", path, LIMITS.octave),
-    semitone: readInteger(o, "semitone", path, LIMITS.semitone),
-    detuneCents: readNumber(o, "detuneCents", path, LIMITS.detuneCents),
-  };
-}
-function uniqueIds<T extends { id: string }>(xs: T[], path: string) {
-  const ids = new Set<string>();
-  xs.forEach((x, i) => {
-    if (ids.has(x.id)) throw new Error(`${path}[${i}].id must be unique`);
-    ids.add(x.id);
-  });
-}
 function readObjectForDiscriminant(value: unknown, path: string): DataRecord {
   if (
     typeof value !== "object" ||
     value === null ||
     Array.isArray(value) ||
     Object.getPrototypeOf(value) !== Object.prototype
-  )
+  ) {
     throw new Error(`${path} must be a plain object`);
-  for (const key of Reflect.ownKeys(value))
+  }
+  for (const key of Reflect.ownKeys(value)) {
     if (typeof key === "symbol") throw new Error(`${path} must not contain symbol keys`);
+  }
   return value as DataRecord;
 }
-function readObject(value: unknown, path: string, keys: readonly string[]): DataRecord {
-  const o = readObjectForDiscriminant(value, path);
-  for (const key of Reflect.ownKeys(o))
-    if (typeof key !== "string" || !keys.includes(key))
+
+function readObject(
+  value: unknown,
+  path: string,
+  allowed: readonly string[],
+  required: readonly string[],
+): DataRecord {
+  const object = readObjectForDiscriminant(value, path);
+  for (const key of Reflect.ownKeys(object)) {
+    if (typeof key !== "string" || !allowed.includes(key)) {
       throw new Error(`${path}.${String(key)} is unknown`);
-  for (const key of keys) {
-    if (!Object.hasOwn(o, key)) throw new Error(`${path}.${key} is required`);
-    const d = Object.getOwnPropertyDescriptor(o, key);
-    if (!d || !("value" in d) || !d.enumerable)
-      throw new Error(`${path}.${key} must be an enumerable data property`);
+    }
+    requireDataProperty(object, key, `${path}.${key}`);
   }
-  return o;
+  for (const key of required) {
+    if (!hasOwn(object, key)) throw new Error(`${path}.${key} is required`);
+  }
+  return object;
 }
+
 function readArray(value: unknown, path: string, min: number, max: number): unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
     throw new Error(`${path} must be an array`);
+  }
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key === "symbol") throw new Error(`${path} must not contain symbol keys`);
     if (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key))
       throw new Error(`${path}.${key} is unknown`);
   }
-  if (value.length < min || value.length > max)
+  if (value.length < min || value.length > max) {
     throw new Error(`${path} must contain ${min}–${max} items`);
-  const out: unknown[] = [];
-  for (let i = 0; i < value.length; i++) {
-    const d = Object.getOwnPropertyDescriptor(value, String(i));
-    if (!d) throw new Error(`${path}[${i}] is required`);
-    if (!("value" in d) || !d.enumerable)
-      throw new Error(`${path}[${i}] must be an enumerable data property`);
-    out.push(d.value);
   }
-  return out;
+  const output: unknown[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const key = String(index);
+    if (!hasOwn(value, key)) throw new Error(`${path}[${index}] is required`);
+    requireDataProperty(value, key, `${path}[${index}]`);
+    output.push((value as unknown[])[index]);
+  }
+  return output;
 }
-function readData(o: DataRecord, key: string, path: string): unknown {
-  const d = Object.getOwnPropertyDescriptor(o, key);
-  if (!d || !("value" in d)) throw new Error(`${path} must be a data property`);
-  return d.value;
+
+function requireDataProperty(object: object, key: PropertyKey, path: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new Error(`${path} must be an enumerable data property`);
+  }
 }
-function readId(o: DataRecord, path: string) {
-  return readRef(o, "id", path);
+
+function hasOwn(object: object, key: PropertyKey): boolean {
+  return Object.hasOwn(object, key);
 }
-function readRef(o: DataRecord, key: string, path: string): string {
-  const v = readData(o, key, `${path}.${key}`);
-  if (typeof v !== "string" || !DEVICE_ID_PATTERN.test(v))
-    throw new Error(`${path}.${key} is invalid`);
-  return v;
+
+function readData(object: DataRecord, key: string, path: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor || !("value" in descriptor)) throw new Error(`${path} must be a data property`);
+  return descriptor.value;
 }
-function readBoolean(o: DataRecord, key: string, path: string) {
-  const v = readData(o, key, `${path}.${key}`);
-  if (typeof v !== "boolean") throw new Error(`${path}.${key} must be a boolean`);
-  return v;
-}
-function readNumber(
-  o: DataRecord,
-  key: string,
-  path: string,
-  [min, max]: readonly [number, number],
-) {
-  const v = readData(o, key, `${path}.${key}`);
-  if (typeof v !== "number" || !Number.isFinite(v))
+
+function readNumber(object: DataRecord, key: string, path: string, [min, max]: Limits): number {
+  const value = readData(object, key, `${path}.${key}`);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${path}.${key} must be a finite number`);
-  if (v < min) throw new Error(`${path}.${key} must be >= ${min}`);
-  if (v > max) throw new Error(`${path}.${key} must be <= ${max}`);
-  return v;
+  }
+  if (value < min) throw new Error(`${path}.${key} must be >= ${min}`);
+  if (value > max) throw new Error(`${path}.${key} must be <= ${max}`);
+  return value;
 }
-function readInteger(o: DataRecord, key: string, path: string, limits: readonly [number, number]) {
-  const v = readNumber(o, key, path, limits);
-  if (!Number.isInteger(v)) throw new Error(`${path}.${key} must be an integer`);
-  return v;
-}
-function readEnum<const T extends readonly string[]>(
-  o: DataRecord,
+
+function optionalNumber(
+  object: DataRecord,
   key: string,
   path: string,
-  values: T,
-): T[number] {
-  const v = readData(o, key, `${path}.${key}`);
-  if (typeof v !== "string" || !values.includes(v))
-    throw new Error(`${path}.${key} is unsupported`);
-  return v as T[number];
+  limits: Limits,
+  fallback: number,
+): number {
+  return hasOwn(object, key) ? readNumber(object, key, path, limits) : fallback;
 }
-function expectLiteral(value: unknown, expected: string | number, path: string) {
-  if (value !== expected) throw new Error(`${path} must be ${expected}`);
+
+function optionalInteger(
+  object: DataRecord,
+  key: string,
+  path: string,
+  limits: Limits,
+  fallback: number,
+): number {
+  const value = optionalNumber(object, key, path, limits, fallback);
+  if (!Number.isInteger(value)) throw new Error(`${path}.${key} must be an integer`);
+  return value;
+}
+
+function optionalBoolean(
+  object: DataRecord,
+  key: string,
+  path: string,
+  fallback: boolean,
+): boolean {
+  if (!hasOwn(object, key)) return fallback;
+  const value = readData(object, key, `${path}.${key}`);
+  if (typeof value !== "boolean") throw new Error(`${path}.${key} must be a boolean`);
+  return value;
+}
+
+function optionalEnum<const Values extends readonly string[]>(
+  object: DataRecord,
+  key: string,
+  path: string,
+  values: Values,
+  fallback: Values[number],
+): Values[number] {
+  if (!hasOwn(object, key)) return fallback;
+  const value = readData(object, key, `${path}.${key}`);
+  if (typeof value !== "string" || !values.includes(value)) {
+    throw new Error(`${path}.${key} is unsupported`);
+  }
+  return value as Values[number];
 }

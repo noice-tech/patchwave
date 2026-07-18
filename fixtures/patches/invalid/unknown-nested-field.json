@@ -3,7 +3,13 @@
     "frequencyHz": 110,
     "gainDb": -12,
     "oscillators": [{ "waveform": "saw", "transposeSemitones": 0, "detuneCents": 0, "level": 1 }],
-    "filter": null,
+    "filter": {
+      "mode": "lowpass",
+      "cutoffHz": 500,
+      "resonance": 0.2,
+      "cutoffLfo": null,
+      "mystery": true
+    },
     "ampEnvelope": {
       "attackSeconds": 0.005,
       "decaySeconds": 0,

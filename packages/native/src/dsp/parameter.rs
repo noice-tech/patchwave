@@ -73,7 +73,7 @@ impl LogRamp {
     pub(crate) fn next(&mut self) -> f32 {
         self.logarithm.next().exp()
     }
-    // V2 clocked oscillators use the authored endpoint exactly when no ramp is active.
+    // Clocked parameters use the authored endpoint exactly when no ramp is active.
     pub(crate) fn next_exact(&mut self) -> f32 {
         let value = self.logarithm.next();
         if self.logarithm.active() {

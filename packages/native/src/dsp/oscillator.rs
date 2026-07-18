@@ -9,8 +9,7 @@ pub(crate) struct OscillatorParameters {
 }
 impl OscillatorParameters {
     pub(crate) fn from_spec(base: f32, spec: OscillatorSpec) -> Self {
-        let semitones =
-            spec.octave as f32 * 12.0 + spec.semitone as f32 + spec.detune_cents / 100.0;
+        let semitones = spec.transpose_semitones as f32 + spec.detune_cents / 100.0;
         Self {
             waveform: spec.waveform,
             frequency_hz: base * 2.0_f32.powf(semitones / 12.0),

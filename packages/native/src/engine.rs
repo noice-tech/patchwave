@@ -10,8 +10,7 @@ use rtrb::{Consumer, Producer, PushError};
 
 use crate::dsp::frame::write_frame;
 use crate::patch::{
-    parse_patch, DeviceSpec, EnvelopeSpec, FilterMode, FilterV2Spec, OscillatorSpec,
-    OscillatorV2Spec, PatchSpec, SendsSpec, StructuralSignature, SubtractiveSynthV2Spec, Waveform,
+    parse_patch, EnvelopeSpec, OscillatorSpec, PatchSpec, SourceSpec, StructuralSignature, Waveform,
 };
 use crate::realtime::{
     create_transport, pack_structural, unpack_structural, Command, DataCallbackLease,
@@ -19,7 +18,7 @@ use crate::realtime::{
 };
 
 const DEFAULT_FREQUENCY: f32 = 440.0;
-const DEFAULT_GAIN: f32 = 0.1;
+const DEFAULT_GAIN_DB: f32 = -20.0;
 const CALLBACK_RELEASE_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct ControlState {
@@ -392,46 +391,25 @@ where
 
 fn default_patch() -> PatchSpec {
     PatchSpec {
-        tempo_bpm: 120.0,
-        modulators: Vec::new(),
-        modulation_routes: Vec::new(),
-        devices: vec![DeviceSpec::SubtractiveSynthV2(SubtractiveSynthV2Spec {
-            id: "voice".to_owned(),
-            enabled: true,
-            base_frequency_hz: DEFAULT_FREQUENCY,
-            output_gain: DEFAULT_GAIN,
-            oscillators: vec![OscillatorV2Spec {
-                id: "osc".to_owned(),
-                oscillator: OscillatorSpec {
-                    waveform: Waveform::Sine,
-                    octave: 0,
-                    semitone: 0,
-                    detune_cents: 0.0,
-                    pulse_width: 0.5,
-                    level: 1.0,
-                },
-                sends: SendsSpec {
-                    filter: 1.0,
-                    insert: 0.0,
-                    direct: 0.0,
-                },
+        source: SourceSpec {
+            frequency_hz: DEFAULT_FREQUENCY,
+            gain_db: DEFAULT_GAIN_DB,
+            oscillators: vec![OscillatorSpec {
+                waveform: Waveform::Sine,
+                transpose_semitones: 0,
+                detune_cents: 0.0,
+                pulse_width: 0.5,
+                level: 1.0,
             }],
+            filter: None,
             amp_envelope: EnvelopeSpec {
                 attack_seconds: 0.0,
                 decay_seconds: 0.0,
                 sustain: 1.0,
                 release_seconds: 0.0,
             },
-            filter: FilterV2Spec {
-                enabled: false,
-                mode: FilterMode::Lowpass,
-                cutoff_hz: 20_000.0,
-                resonance: 0.0,
-                insert_send: 1.0,
-                direct_send: 0.0,
-            },
-            audio_rate_route: None,
-        })],
+        },
+        effects: Vec::new(),
     }
 }
 
@@ -467,18 +445,12 @@ mod tests {
 
     fn with_frequency(control: &ControlState, frequency: f32) -> PatchSpec {
         let mut candidate = control.accepted.clone();
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut candidate.devices[0] else {
-            panic!("synth source");
-        };
-        synth.base_frequency_hz = frequency;
+        candidate.source.frequency_hz = frequency;
         candidate
     }
 
     fn accepted_frequency(control: &ControlState) -> f32 {
-        let DeviceSpec::SubtractiveSynthV2(synth) = &control.accepted.devices[0] else {
-            panic!("synth source");
-        };
-        synth.base_frequency_hz
+        control.accepted.source.frequency_hz
     }
 
     #[test]
@@ -503,10 +475,13 @@ mod tests {
         assert_eq!(control.accepted_generation, 0);
 
         let mut structural = control.accepted.clone();
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut structural.devices[0] else {
-            panic!("synth source");
-        };
-        synth.id = "replacement".to_owned();
+        structural.source.oscillators.push(OscillatorSpec {
+            waveform: Waveform::Sine,
+            transpose_semitones: 12,
+            detune_cents: 0.0,
+            pulse_width: 0.5,
+            level: 0.5,
+        });
         control.enqueue_candidate(structural).unwrap();
         assert_eq!(control.status.structural().0, StructuralTag::Reserved);
         let parameter = with_frequency(&control, 880.0);

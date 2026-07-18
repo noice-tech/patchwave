@@ -1,60 +1,60 @@
-use super::modulation::{ModParameters, ModulationBank, PatchModParameters};
 use super::saturator::{PreparedSaturator, SaturatorParameters};
 use super::stereo_delay::{PreparedStereoDelay, StereoDelayParameters};
-use super::synth_v2::{PreparedSynthV2, SynthV2Parameters};
+use super::synth::{PreparedSynth, SynthParameters};
 use crate::dsp::frame::StereoFrame;
 use crate::dsp::safety::sanitize;
-use crate::patch::{
-    DeviceKind, DeviceSpec, PatchError, PatchSpec, RouteIdentity, StructuralSignature,
-};
+use crate::patch::{EffectKind, EffectSpec, PatchError, PatchSpec, StructuralSignature};
 use arrayvec::ArrayVec;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ProcessorParameters {
+pub(crate) enum EffectParameters {
     Saturator(SaturatorParameters),
     StereoDelay(StereoDelayParameters),
 }
-impl ProcessorParameters {
-    fn kind(self) -> DeviceKind {
+
+impl EffectParameters {
+    fn kind(self) -> EffectKind {
         match self {
-            Self::Saturator(_) => DeviceKind::Saturator,
-            Self::StereoDelay(_) => DeviceKind::StereoDelay,
+            Self::Saturator(_) => EffectKind::Saturator,
+            Self::StereoDelay(_) => EffectKind::StereoDelay,
         }
     }
 }
+
 #[derive(Clone, Debug)]
 pub(crate) struct ParameterSnapshot {
     pub(crate) generation: u64,
     pub(crate) signature: StructuralSignature,
-    pub(crate) source: SynthV2Parameters,
-    pub(crate) processors: ArrayVec<ProcessorParameters, 7>,
-    pub(crate) patch_modulators: PatchModParameters,
+    pub(crate) source: SynthParameters,
+    pub(crate) effects: ArrayVec<EffectParameters, 7>,
 }
 
-enum Device {
+enum Effect {
     Saturator(PreparedSaturator),
     StereoDelay(PreparedStereoDelay),
 }
+
 pub(crate) struct PreparedChain {
     signature: StructuralSignature,
-    source: Box<PreparedSynthV2>,
-    modulators: ModulationBank,
-    processors: Vec<Device>,
-    frame_index: u64,
+    source: Box<PreparedSynth>,
+    effects: Vec<Effect>,
     gate: bool,
     #[cfg(test)]
     drop_probe: Option<DropProbe>,
 }
+
 #[cfg(test)]
 pub(crate) struct DropProbe {
     log: std::sync::Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>,
 }
+
 #[cfg(test)]
 impl DropProbe {
     pub(crate) fn new(log: std::sync::Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>) -> Self {
         Self { log }
     }
 }
+
 #[cfg(test)]
 impl Drop for DropProbe {
     fn drop(&mut self) {
@@ -64,6 +64,7 @@ impl Drop for DropProbe {
             .push(std::thread::current().id());
     }
 }
+
 impl PreparedChain {
     pub(crate) fn prepare_at(spec: &PatchSpec, sample_rate: f32) -> Result<Self, PatchError> {
         if !sample_rate.is_finite() || !(100.0..=768_000.0).contains(&sample_rate) {
@@ -71,188 +72,140 @@ impl PreparedChain {
                 "sample rate must be finite and within 100–768000 Hz",
             ));
         }
-        let source_params = source_parameters(spec)?;
-        let source =
-            Box::new(PreparedSynthV2::new(source_params, sample_rate).map_err(PatchError::new)?);
-        let signature = spec.structural_signature();
-        let mut processors = Vec::new();
-        processors
-            .try_reserve_exact(spec.devices.len() - 1)
-            .map_err(|_| PatchError::new("processor allocation failed"))?;
-        for d in &spec.devices[1..] {
-            processors.push(match d {
-                DeviceSpec::Saturator(s) => {
-                    Device::Saturator(PreparedSaturator::new(s.into(), sample_rate))
-                }
-                DeviceSpec::StereoDelay(s) => Device::StereoDelay(
-                    PreparedStereoDelay::new(s.into(), sample_rate).map_err(PatchError::new)?,
+        let source = Box::new(PreparedSynth::new(
+            SynthParameters::from_spec(&spec.source),
+            sample_rate,
+        ));
+        let mut effects = Vec::new();
+        effects
+            .try_reserve_exact(spec.effects.len())
+            .map_err(|_| PatchError::new("effect allocation failed"))?;
+        for effect in &spec.effects {
+            effects.push(match effect {
+                EffectSpec::Saturator(spec) => Effect::Saturator(PreparedSaturator::new(
+                    SaturatorParameters::from(spec),
+                    sample_rate,
+                )),
+                EffectSpec::StereoDelay(spec) => Effect::StereoDelay(
+                    PreparedStereoDelay::new(StereoDelayParameters::from(spec), sample_rate)
+                        .map_err(PatchError::new)?,
                 ),
-                DeviceSpec::SubtractiveSynthV2(_) => {
-                    return Err(PatchError::new("unexpected source"))
-                }
             });
         }
-        let patch_modulators = PatchModParameters::from_specs(
-            spec.tempo_bpm,
-            &spec.modulators,
-            &spec.modulation_routes,
-        );
         Ok(Self {
-            signature,
+            signature: spec.structural_signature(),
             source,
-            modulators: ModulationBank::new(patch_modulators, sample_rate),
-            processors,
-            frame_index: 0,
+            effects,
             gate: false,
             #[cfg(test)]
             drop_probe: None,
         })
     }
+
     pub(crate) fn set_gate(&mut self, gate: bool) {
         self.gate = gate;
-        self.modulators.set_gate(gate);
         self.source.set_gate(gate);
     }
+
     pub(crate) fn process(&mut self) -> StereoFrame {
-        let control = self.modulators.process();
-        let mut signal = self.source.process(control);
-        for d in &mut self.processors {
-            signal.insert = match d {
-                Device::Saturator(x) => x.process(signal.insert),
-                Device::StereoDelay(x) => x.process(signal.insert),
-            }
+        let mut signal = self.source.process();
+        for effect in &mut self.effects {
+            signal = match effect {
+                Effect::Saturator(effect) => effect.process(signal),
+                Effect::StereoDelay(effect) => effect.process(signal),
+            };
         }
-        self.frame_index = self.frame_index.wrapping_add(1);
-        sanitize(StereoFrame {
-            left: signal.insert.left + signal.direct.left,
-            right: signal.insert.right + signal.direct.right,
-        })
+        sanitize(signal)
     }
-    pub(crate) fn apply(&mut self, s: &ParameterSnapshot) -> Result<(), &'static str> {
-        if s.signature != self.signature
-            || s.processors.len() != self.processors.len()
-            || !payload_matches_signature(
-                &s.signature,
-                s.source,
-                &s.patch_modulators,
-                &s.processors,
-            )
+
+    pub(crate) fn apply(&mut self, snapshot: &ParameterSnapshot) -> Result<(), &'static str> {
+        if snapshot.signature != self.signature
+            || snapshot.effects.len() != self.effects.len()
+            || snapshot.source.oscillator_count != self.signature.oscillator_count
         {
             return Err("parameter snapshot topology mismatch");
         }
-        for (device, parameters) in self.processors.iter().zip(s.processors.iter().copied()) {
-            match (device, parameters) {
-                (Device::Saturator(_), ProcessorParameters::Saturator(_))
-                | (Device::StereoDelay(_), ProcessorParameters::StereoDelay(_)) => {}
-                _ => return Err("parameter snapshot processor mismatch"),
+        for (effect, parameters) in self.effects.iter().zip(snapshot.effects.iter().copied()) {
+            match (effect, parameters) {
+                (Effect::Saturator(_), EffectParameters::Saturator(_))
+                | (Effect::StereoDelay(_), EffectParameters::StereoDelay(_)) => {}
+                _ => return Err("parameter snapshot effect mismatch"),
             }
         }
-        self.source.update(s.source);
-        self.modulators.update(s.patch_modulators);
-        for (d, p) in self.processors.iter_mut().zip(s.processors.iter().copied()) {
-            match (d, p) {
-                (Device::Saturator(x), ProcessorParameters::Saturator(p)) => x.update(p),
-                (Device::StereoDelay(x), ProcessorParameters::StereoDelay(p)) => x.update(p),
+        if snapshot
+            .effects
+            .iter()
+            .copied()
+            .enumerate()
+            .any(|(index, parameters)| self.signature.effects[index] != parameters.kind())
+        {
+            return Err("parameter snapshot signature mismatch");
+        }
+        self.source.update(snapshot.source);
+        for (effect, parameters) in self
+            .effects
+            .iter_mut()
+            .zip(snapshot.effects.iter().copied())
+        {
+            match (effect, parameters) {
+                (Effect::Saturator(effect), EffectParameters::Saturator(parameters)) => {
+                    effect.update(parameters)
+                }
+                (Effect::StereoDelay(effect), EffectParameters::StereoDelay(parameters)) => {
+                    effect.update(parameters)
+                }
                 _ => unreachable!(),
             }
         }
         Ok(())
     }
+
     #[cfg(test)]
     pub(crate) fn set_drop_probe(&mut self, probe: DropProbe) {
-        self.drop_probe = Some(probe)
+        self.drop_probe = Some(probe);
     }
-}
-fn payload_matches_signature(
-    signature: &StructuralSignature,
-    source: SynthV2Parameters,
-    modulators: &PatchModParameters,
-    processors: &ArrayVec<ProcessorParameters, 7>,
-) -> bool {
-    if usize::from(signature.device_count) != processors.len() + 1
-        || signature.modulator_count != modulators.count
-        || signature.route_count != modulators.route_count
-    {
-        return false;
-    }
-    let source_matches = signature.devices[0].kind == DeviceKind::SubtractiveSynthV2
-        && signature.oscillator_count == source.oscillator_count
-        && signature.pm.present == source.pm.present
-        && signature.pm.source == source.pm.source
-        && signature.pm.target == source.pm.target
-        && signature.pm.latency_frames == if source.pm.present { 48 } else { 0 };
-    if !source_matches {
-        return false;
-    }
-    for index in 0..usize::from(signature.modulator_count) {
-        let kind = match modulators.modulators[index] {
-            ModParameters::Lfo { .. } => 1,
-            ModParameters::Envelope { .. } => 2,
-            ModParameters::Empty => return false,
-        };
-        if signature.modulators[index].kind != kind {
-            return false;
-        }
-    }
-    for index in 0..usize::from(signature.route_count) {
-        let route = modulators.routes[index];
-        if signature.routes[index] != RouteIdentity::from_parts(route.source, route.target) {
-            return false;
-        }
-    }
-    processors
-        .iter()
-        .copied()
-        .enumerate()
-        .all(|(index, parameters)| signature.devices[index + 1].kind == parameters.kind())
 }
 
-fn source_parameters(spec: &PatchSpec) -> Result<SynthV2Parameters, PatchError> {
-    match spec.devices.first() {
-        Some(DeviceSpec::SubtractiveSynthV2(s)) => Ok(SynthV2Parameters::from_spec(s)),
-        _ => Err(PatchError::new("first device must be synth")),
-    }
-}
 impl PatchSpec {
     pub(crate) fn prepare_chain(&self, sample_rate: f32) -> Result<PreparedChain, PatchError> {
         PreparedChain::prepare_at(self, sample_rate)
     }
+
     pub(crate) fn parameter_snapshot(
         &self,
         generation: u64,
     ) -> Result<ParameterSnapshot, PatchError> {
-        let mut processors = ArrayVec::new();
-        for d in &self.devices[1..] {
-            let p = match d {
-                DeviceSpec::Saturator(x) => ProcessorParameters::Saturator(x.into()),
-                DeviceSpec::StereoDelay(x) => ProcessorParameters::StereoDelay(x.into()),
-                _ => return Err(PatchError::new("unexpected source")),
+        let mut effects = ArrayVec::new();
+        for effect in &self.effects {
+            let parameters = match effect {
+                EffectSpec::Saturator(spec) => {
+                    EffectParameters::Saturator(SaturatorParameters::from(spec))
+                }
+                EffectSpec::StereoDelay(spec) => {
+                    EffectParameters::StereoDelay(StereoDelayParameters::from(spec))
+                }
             };
-            processors
-                .try_push(p)
-                .map_err(|_| PatchError::new("processor image exceeds fixed capacity"))?;
+            effects
+                .try_push(parameters)
+                .map_err(|_| PatchError::new("parameter image exceeds fixed capacity"))?;
         }
         Ok(ParameterSnapshot {
             generation,
             signature: self.structural_signature(),
-            source: source_parameters(self)?,
-            processors,
-            patch_modulators: PatchModParameters::from_specs(
-                self.tempo_bpm,
-                &self.modulators,
-                &self.modulation_routes,
-            ),
+            source: SynthParameters::from_spec(&self.source),
+            effects,
         })
     }
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<ParameterSnapshot>() <= 2048);
+    assert!(std::mem::size_of::<ParameterSnapshot>() <= 2_048);
 };
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::patch::{parse_patch, RouteTarget, SaturatorSpec};
+    use crate::patch::{parse_patch, EffectSpec, LfoShape, SaturatorSpec};
 
     fn minimal() -> PatchSpec {
         parse_patch(include_str!(concat!(
@@ -262,137 +215,23 @@ mod tests {
         .unwrap()
     }
 
-    fn composable() -> PatchSpec {
+    fn wobble() -> PatchSpec {
         parse_patch(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/patches/valid/composable.json"
+            "/../../fixtures/patches/valid/wobble.json"
         )))
         .unwrap()
     }
 
-    fn assert_rejected_without_mutation(spec: &PatchSpec, snapshot: ParameterSnapshot) {
+    #[test]
+    fn parameter_snapshot_budget_and_identity() {
+        assert!(std::mem::size_of::<ParameterSnapshot>() <= 2_048);
+        let spec = wobble();
         let mut candidate = spec.prepare_chain(4_000.0).unwrap();
         let mut control = spec.prepare_chain(4_000.0).unwrap();
         candidate.set_gate(true);
         control.set_gate(true);
         for _ in 0..31 {
-            assert_eq!(candidate.process(), control.process());
-        }
-        assert!(candidate.apply(&snapshot).is_err());
-        for _ in 0..31 {
-            assert_eq!(candidate.process(), control.process());
-        }
-    }
-
-    fn route_source(spec: &mut PatchSpec, insert: f32, direct: f32) {
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut spec.devices[0] else {
-            panic!("synth source")
-        };
-        synth.oscillators[0].sends = crate::patch::SendsSpec {
-            filter: 0.0,
-            insert,
-            direct,
-        };
-        synth.filter.insert_send = 0.0;
-        synth.filter.direct_send = 0.0;
-    }
-
-    fn render(spec: PatchSpec, frames: usize) -> Vec<StereoFrame> {
-        let mut chain = spec.prepare_chain(4_000.0).unwrap();
-        chain.set_gate(true);
-        (0..frames).map(|_| chain.process()).collect()
-    }
-
-    #[test]
-    fn snapshot_budget() {
-        assert!(std::mem::size_of::<ParameterSnapshot>() <= 2048);
-    }
-    #[test]
-    fn direct_bypasses_processors_but_insert_does_not() {
-        let mut direct = minimal();
-        route_source(&mut direct, 0.0, 1.0);
-        let direct_control = render(direct.clone(), 64);
-        direct.devices.push(DeviceSpec::Saturator(SaturatorSpec {
-            id: "drive".to_owned(),
-            enabled: true,
-            drive_db: 36.0,
-            output_gain_db: 0.0,
-            mix: 1.0,
-        }));
-        assert_eq!(render(direct, 64), direct_control);
-
-        let mut insert = minimal();
-        route_source(&mut insert, 1.0, 0.0);
-        let insert_control = render(insert.clone(), 64);
-        insert.devices.push(DeviceSpec::Saturator(SaturatorSpec {
-            id: "drive".to_owned(),
-            enabled: true,
-            drive_db: 36.0,
-            output_gain_db: 0.0,
-            mix: 1.0,
-        }));
-        assert_ne!(render(insert, 64), insert_control);
-    }
-
-    #[test]
-    fn complete_identity_mismatches_reject_before_mutation() {
-        let base = minimal();
-
-        let mut renamed_device = base.clone();
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut renamed_device.devices[0] else {
-            panic!("synth source")
-        };
-        synth.id = "renamedVoice".to_owned();
-        assert_rejected_without_mutation(&base, renamed_device.parameter_snapshot(1).unwrap());
-
-        let mut renamed_oscillator = base.clone();
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut renamed_oscillator.devices[0] else {
-            panic!("synth source")
-        };
-        synth.oscillators[0].id = "renamedOsc".to_owned();
-        assert_rejected_without_mutation(&base, renamed_oscillator.parameter_snapshot(2).unwrap());
-
-        let modulated = composable();
-        let mut renamed_modulator = modulated.clone();
-        match &mut renamed_modulator.modulators[0] {
-            crate::patch::ModulatorSpec::Lfo { id, .. }
-            | crate::patch::ModulatorSpec::Envelope { id, .. } => *id = "renamedMod".to_owned(),
-        }
-        assert_rejected_without_mutation(
-            &modulated,
-            renamed_modulator.parameter_snapshot(3).unwrap(),
-        );
-    }
-
-    #[test]
-    fn duplicated_parameter_topology_fields_are_preflighted() {
-        let base = minimal();
-        let mut oscillator_count = base.parameter_snapshot(4).unwrap();
-        oscillator_count.source.oscillator_count = 2;
-        assert_rejected_without_mutation(&base, oscillator_count);
-
-        let modulated = composable();
-        let mut route_count = modulated.parameter_snapshot(5).unwrap();
-        route_count.patch_modulators.route_count -= 1;
-        assert_rejected_without_mutation(&modulated, route_count);
-
-        let mut route_target = modulated.parameter_snapshot(6).unwrap();
-        route_target.patch_modulators.routes[0].target = RouteTarget::SourceGain;
-        assert_rejected_without_mutation(&modulated, route_target);
-
-        let mut pm_target = modulated.parameter_snapshot(7).unwrap();
-        pm_target.source.pm.target = pm_target.source.pm.source;
-        assert_rejected_without_mutation(&modulated, pm_target);
-    }
-
-    #[test]
-    fn identical_snapshot_preserves_all_source_state() {
-        let spec = minimal();
-        let mut candidate = spec.prepare_chain(4_000.0).unwrap();
-        let mut control = spec.prepare_chain(4_000.0).unwrap();
-        candidate.set_gate(true);
-        control.set_gate(true);
-        for _ in 0..17 {
             assert_eq!(candidate.process(), control.process());
         }
         candidate
@@ -404,13 +243,106 @@ mod tests {
     }
 
     #[test]
-    fn pm_preparation_obeys_internal_rate_ceiling() {
-        let spec = parse_patch(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/patches/valid/composable.json"
-        )))
-        .unwrap();
-        assert!(spec.prepare_chain(192_000.0).is_ok());
-        assert!(spec.prepare_chain(192_001.0).is_err());
+    fn changed_parameter_snapshot_is_applied_without_replacing_topology() {
+        let spec = wobble();
+        let mut updated = spec.clone();
+        updated.source.frequency_hz = 82.0;
+        updated.source.gain_db = -20.0;
+        let filter = updated.source.filter.as_mut().unwrap();
+        filter.cutoff_hz = 640.0;
+        let lfo = filter.cutoff_lfo.as_mut().unwrap();
+        lfo.shape = LfoShape::SawDown;
+        lfo.rate_hz = 4.0;
+        lfo.amount_octaves = 1.0;
+        let EffectSpec::Saturator(saturator) = &mut updated.effects[0] else {
+            panic!("saturator")
+        };
+        saturator.drive_db = 3.0;
+        let EffectSpec::StereoDelay(delay) = &mut updated.effects[1] else {
+            panic!("stereo delay")
+        };
+        delay.feedback = 0.6;
+
+        assert_eq!(spec.structural_signature(), updated.structural_signature());
+        let snapshot = updated.parameter_snapshot(3).unwrap();
+        assert_eq!(snapshot.source.filter.cutoff_hz, 640.0);
+        assert_eq!(snapshot.source.filter.lfo_shape, LfoShape::SawDown);
+        assert_eq!(snapshot.source.filter.lfo_rate_hz, 4.0);
+        let EffectParameters::Saturator(parameters) = snapshot.effects[0] else {
+            panic!("saturator parameters")
+        };
+        assert_eq!(parameters.drive_db, 3.0);
+        let EffectParameters::StereoDelay(parameters) = snapshot.effects[1] else {
+            panic!("delay parameters")
+        };
+        assert_eq!(parameters.feedback, 0.6);
+
+        let mut candidate = spec.prepare_chain(4_000.0).unwrap();
+        let mut control = spec.prepare_chain(4_000.0).unwrap();
+        candidate.set_gate(true);
+        control.set_gate(true);
+        for _ in 0..64 {
+            assert_eq!(candidate.process(), control.process());
+        }
+        candidate.apply(&snapshot).unwrap();
+        assert!((0..128).any(|_| candidate.process() != control.process()));
+    }
+
+    #[test]
+    fn topology_mismatch_rejects_before_mutation() {
+        let spec = minimal();
+        let mut candidate = spec.prepare_chain(4_000.0).unwrap();
+        let mut control = spec.prepare_chain(4_000.0).unwrap();
+        candidate.set_gate(true);
+        control.set_gate(true);
+        for _ in 0..17 {
+            assert_eq!(candidate.process(), control.process());
+        }
+        let mut incompatible = spec.clone();
+        incompatible
+            .effects
+            .push(EffectSpec::Saturator(SaturatorSpec {
+                drive_db: 12.0,
+                output_gain_db: -6.0,
+                mix: 1.0,
+            }));
+        assert!(candidate
+            .apply(&incompatible.parameter_snapshot(3).unwrap())
+            .is_err());
+        for _ in 0..31 {
+            assert_eq!(candidate.process(), control.process());
+        }
+    }
+
+    #[test]
+    fn effects_continue_after_source_release() {
+        let mut spec = minimal();
+        spec.source.amp_envelope.release_seconds = 0.0;
+        spec.effects
+            .push(EffectSpec::StereoDelay(crate::patch::StereoDelaySpec {
+                time_seconds: 0.01,
+                feedback: 0.0,
+                damping: 0.0,
+                ping_pong: false,
+                mix: 1.0,
+            }));
+        let mut chain = spec.prepare_chain(1_000.0).unwrap();
+        chain.set_gate(true);
+        for _ in 0..5 {
+            chain.process();
+        }
+        let mut updated = spec.clone();
+        updated.source.frequency_hz = 220.0;
+        let EffectSpec::StereoDelay(delay) = &mut updated.effects[0] else {
+            panic!("stereo delay")
+        };
+        delay.feedback = 0.5;
+        chain
+            .apply(&updated.parameter_snapshot(4).unwrap())
+            .unwrap();
+        chain.set_gate(false);
+        let tail: Vec<_> = (0..16).map(|_| chain.process()).collect();
+        assert!(tail.iter().any(|frame| frame.left.abs() > 0.0));
+        assert_eq!(tail[15], StereoFrame::default());
     }
 }

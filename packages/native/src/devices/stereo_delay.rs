@@ -7,8 +7,7 @@ use crate::dsp::safety::feedback as safe;
 use crate::patch::StereoDelaySpec;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StereoDelayParameters {
-    pub enabled: bool,
-    pub time_ms: f32,
+    pub time_seconds: f32,
     pub feedback: f32,
     pub damping: f32,
     pub ping_pong: bool,
@@ -17,8 +16,7 @@ pub(crate) struct StereoDelayParameters {
 impl From<&StereoDelaySpec> for StereoDelayParameters {
     fn from(s: &StereoDelaySpec) -> Self {
         Self {
-            enabled: s.enabled,
-            time_ms: s.time_ms,
+            time_seconds: s.time_seconds,
             feedback: s.feedback,
             damping: s.damping,
             ping_pong: s.ping_pong,
@@ -91,14 +89,13 @@ pub(crate) struct PreparedStereoDelay {
     damping: LinearRamp,
     ping: LinearRamp,
     mix: LinearRamp,
-    enabled: LinearRamp,
 }
 impl PreparedStereoDelay {
     pub(crate) fn new(p: StereoDelayParameters, sr: f32) -> Result<Self, &'static str> {
         if !sr.is_finite() || sr < 10.0 {
             return Err("sample rate must be finite and at least 10 Hz");
         }
-        let samples = (p.time_ms * sr / 1000.0).clamp(1.0, 2.0 * sr);
+        let samples = (p.time_seconds * sr).clamp(1.0, 2.0 * sr);
         Ok(Self {
             sample_rate: sr,
             left: DelayLine::new(sr)?,
@@ -110,12 +107,11 @@ impl PreparedStereoDelay {
             damping: LinearRamp::new(p.damping),
             ping: LinearRamp::new(if p.ping_pong { 1.0 } else { 0.0 }),
             mix: LinearRamp::new(p.mix),
-            enabled: LinearRamp::new(if p.enabled { 1.0 } else { 0.0 }),
         })
     }
     pub(crate) fn update(&mut self, p: StereoDelayParameters) {
         self.tap.request(
-            (p.time_ms * self.sample_rate / 1000.0).clamp(1.0, 2.0 * self.sample_rate),
+            (p.time_seconds * self.sample_rate).clamp(1.0, 2.0 * self.sample_rate),
             self.sample_rate,
         );
         self.feedback
@@ -124,8 +120,6 @@ impl PreparedStereoDelay {
         self.ping
             .set_target(if p.ping_pong { 1.0 } else { 0.0 }, 0.010, self.sample_rate);
         self.mix.set_target(p.mix, 0.010, self.sample_rate);
-        self.enabled
-            .set_target(if p.enabled { 1.0 } else { 0.0 }, 0.010, self.sample_rate);
     }
     pub(crate) fn process(&mut self, input: StereoFrame) -> StereoFrame {
         let (del_l, del_r) = self.tap.read(&self.left, &self.right);
@@ -144,14 +138,9 @@ impl PreparedStereoDelay {
         self.left.advance();
         self.right.advance();
         let mix = self.mix.next();
-        let processed = StereoFrame {
+        StereoFrame {
             left: equal_power(input.left, del_l, mix),
             right: equal_power(input.right, del_r, mix),
-        };
-        let en = self.enabled.next();
-        StereoFrame {
-            left: equal_power(input.left, processed.left, en),
-            right: equal_power(input.right, processed.right, en),
         }
     }
 }
@@ -161,8 +150,7 @@ mod tests {
     #[test]
     fn impulse_repeats_alternate_in_ping_pong_mode() {
         let params = StereoDelayParameters {
-            enabled: true,
-            time_ms: 10.0,
+            time_seconds: 0.010,
             feedback: 0.5,
             damping: 0.0,
             ping_pong: true,
@@ -191,8 +179,7 @@ mod tests {
         fn render(damping: f32) -> Vec<StereoFrame> {
             let mut delay = PreparedStereoDelay::new(
                 StereoDelayParameters {
-                    enabled: true,
-                    time_ms: 1.0,
+                    time_seconds: 0.001,
                     feedback: 0.8,
                     damping,
                     ping_pong: false,
@@ -223,11 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn disabled_delay_keeps_advancing_its_tail() {
+    fn delay_keeps_advancing_its_tail() {
         let mut delay = PreparedStereoDelay::new(
             StereoDelayParameters {
-                enabled: false,
-                time_ms: 10.0,
+                time_seconds: 0.010,
                 feedback: 0.0,
                 damping: 0.0,
                 ping_pong: false,
@@ -243,14 +229,6 @@ mod tests {
         for _ in 0..9 {
             delay.process(StereoFrame::default());
         }
-        delay.update(StereoDelayParameters {
-            enabled: true,
-            time_ms: 10.0,
-            feedback: 0.0,
-            damping: 0.0,
-            ping_pong: false,
-            mix: 1.0,
-        });
         let output = delay.process(StereoFrame::default());
         assert!(output.left.abs() > 0.01);
     }
@@ -274,8 +252,7 @@ mod tests {
     fn invalid_rate_rejected() {
         assert!(PreparedStereoDelay::new(
             StereoDelayParameters {
-                enabled: true,
-                time_ms: 1.0,
+                time_seconds: 0.001,
                 feedback: 0.0,
                 damping: 0.0,
                 ping_pong: false,

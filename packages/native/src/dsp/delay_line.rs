@@ -20,11 +20,11 @@ impl DelayLine {
         Ok(Self { buffer, write: 0 })
     }
     pub(crate) fn read(&self, delay_samples: f32) -> f32 {
-        let len = self.buffer.len() as f32;
-        let pos = (self.write as f32 - delay_samples).rem_euclid(len);
+        let len = self.buffer.len() as f64;
+        let pos = (self.write as f64 - f64::from(delay_samples)).rem_euclid(len);
         let i0 = pos.floor() as usize;
         let i1 = (i0 + 1) % self.buffer.len();
-        let frac = pos - i0 as f32;
+        let frac = (pos - i0 as f64) as f32;
         self.buffer[i0] + (self.buffer[i1] - self.buffer[i0]) * frac
     }
     pub(crate) fn write(&mut self, value: f32) {

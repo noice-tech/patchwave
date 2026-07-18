@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import type { Patch } from "@patchwave/schema";
+import { validatePatch } from "@patchwave/schema";
 import {
   runCli,
   type CliAudioEngine,
@@ -77,44 +77,13 @@ class FakeEngine implements CliAudioEngine {
 }
 
 function loaded(): LoadedPatch {
-  const patch: Patch = {
-    tempoBpm: 120,
-    modulators: [],
-    modulationRoutes: [],
-    devices: [
-      {
-        id: "voice",
-        type: "subtractiveSynth",
-        enabled: true,
-        baseFrequencyHz: 110,
-        outputGain: 0.1,
-        oscillators: [
-          {
-            id: "osc",
-            waveform: "sine",
-            octave: 0,
-            semitone: 0,
-            detuneCents: 0,
-            level: 1,
-            sends: { filter: 1, insert: 0, direct: 0 },
-          },
-        ],
-        ampEnvelope: { attackSeconds: 0, decaySeconds: 0, sustain: 1, releaseSeconds: 0 },
-        filter: {
-          enabled: false,
-          mode: "lowpass",
-          cutoffHz: 20_000,
-          resonance: 0,
-          sends: { insert: 1, direct: 0 },
-        },
-        audioRateRoutes: [],
-      },
-    ],
-  };
+  const patch = validatePatch({
+    source: { frequencyHz: 110, oscillators: [{ waveform: "sine" }] },
+  });
   return {
     patch,
     serialized: JSON.stringify(patch),
-    summary: "120 BPM; 0 modulators; 0 routes; subtractiveSynth#voice",
+    summary: "110 Hz; 1 oscillator; 0 effects",
   };
 }
 
@@ -178,10 +147,7 @@ test("fake TTY drives one patch call, gate toggle, q, and cleanup", async () => 
   assert.deepEqual(harness.input.rawChanges, [true, false]);
   assert.equal(harness.input.resumed, false);
   assert.equal(harness.watcher.closed, true);
-  assert.match(
-    harness.output.logs.join("\n"),
-    /Chain: 120 BPM; 0 modulators; 0 routes; subtractiveSynth#voice/,
-  );
+  assert.match(harness.output.logs.join("\n"), /Chain: 110 Hz; 1 oscillator; 0 effects/);
 });
 
 test("raw Ctrl+C and SIGTERM both use the normal cleanup path", async () => {

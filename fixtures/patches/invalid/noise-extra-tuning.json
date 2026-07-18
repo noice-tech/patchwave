@@ -2,7 +2,7 @@
   "source": {
     "frequencyHz": 110,
     "gainDb": -12,
-    "oscillators": [{ "waveform": "saw", "transposeSemitones": 0, "detuneCents": 0, "level": 1 }],
+    "oscillators": [{ "waveform": "noise", "level": 1, "transposeSemitones": 0 }],
     "filter": null,
     "ampEnvelope": {
       "attackSeconds": 0.005,

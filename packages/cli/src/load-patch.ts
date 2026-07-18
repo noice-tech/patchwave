@@ -1,9 +1,9 @@
 import { pathToFileURL } from "node:url";
-import { PATCH_JSON_MAX_BYTES, validatePatch, type Patch } from "@patchwave/schema";
+import { PATCH_JSON_MAX_BYTES, validatePatch } from "@patchwave/schema";
 import { tsImport } from "tsx/esm/api";
 
 export type LoadedPatch = {
-  patch: Patch;
+  patch: ReturnType<typeof validatePatch>;
   serialized: string;
   summary: string;
 };
@@ -23,7 +23,7 @@ export function normalizePatchExport(exported: unknown): LoadedPatch {
   return {
     patch,
     serialized,
-    summary: `${patch.tempoBpm} BPM; ${patch.modulators.length} modulators; ${patch.modulationRoutes.length} routes; ${patch.devices.map((device) => `${device.type}#${device.id}`).join(" -> ")}`,
+    summary: `${patch.source.frequencyHz} Hz; ${patch.source.oscillators.length} oscillator${patch.source.oscillators.length === 1 ? "" : "s"}; ${patch.effects.length} effect${patch.effects.length === 1 ? "" : "s"}`,
   };
 }
 

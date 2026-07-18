@@ -1,144 +1,40 @@
 import type { Patch } from "@patchwave/schema";
 
+// A gate-reset filter wobble. Effects run from left to right.
 export default {
-  tempoBpm: 140,
-  modulators: [
-    {
-      id: "wobble",
-      type: "lfo",
-      enabled: true,
-      shape: "sine",
-      polarity: "unipolar",
-      rate: {
-        mode: "sync",
-        division: "1/8",
+  source: {
+    frequencyHz: 50,
+    gainDb: -14,
+    oscillators: [
+      { waveform: "saw", transposeSemitones: 12, detuneCents: -7, level: 0.35 },
+      { waveform: "saw", transposeSemitones: 12, detuneCents: 7, level: 0.35 },
+      { waveform: "sine", level: 0.8 },
+    ],
+    filter: {
+      mode: "lowpass",
+      cutoffHz: 220,
+      resonance: 0.7,
+      cutoffLfo: {
+        rateHz: 2.5,
+        amountOctaves: 2.5,
       },
-      phaseMode: "gateReset",
-      phaseOffset: 0,
     },
-    {
-      id: "pluck",
-      type: "envelope",
-      enabled: true,
-      attackSeconds: 0,
-      decaySeconds: 0.2,
-      sustain: 0,
-      releaseSeconds: 0.1,
+    ampEnvelope: {
+      attackSeconds: 0.005,
+      decaySeconds: 0.1,
+      sustain: 0.9,
+      releaseSeconds: 0.15,
     },
-  ],
-  modulationRoutes: [
+  },
+  effects: [
+    { type: "saturator", driveDb: 18, outputGainDb: -8, mix: 0.8 },
     {
-      source: "wobble",
-      target: {
-        type: "pulseWidth",
-        device: "voice",
-        oscillator: "bite",
-      },
-      amount: 0.3,
-    },
-    {
-      source: "pluck",
-      target: {
-        type: "filterCutoff",
-        device: "voice",
-      },
-      amountOctaves: 4,
-    },
-  ],
-  devices: [
-    {
-      id: "voice",
-      type: "subtractiveSynth",
-      enabled: true,
-      baseFrequencyHz: 250,
-      outputGain: 0.3,
-      oscillators: [
-        {
-          id: "carrier",
-          waveform: "sine",
-          octave: -1,
-          semitone: 0,
-          detuneCents: 0,
-          level: 0.8,
-          sends: {
-            filter: 1,
-            insert: 0,
-            direct: 0,
-          },
-        },
-        {
-          id: "modulator",
-          waveform: "sine",
-          octave: -3,
-          semitone: 1,
-          detuneCents: 0,
-          level: 0,
-          sends: {
-            filter: 0,
-            insert: 0,
-            direct: 0,
-          },
-        },
-        {
-          id: "bite",
-          waveform: "pulse",
-          octave: -1,
-          semitone: 0,
-          detuneCents: 0,
-          pulseWidth: 0.5,
-          level: 0.65,
-          sends: {
-            filter: 1,
-            insert: 0,
-            direct: 0,
-          },
-        },
-        {
-          id: "sub",
-          waveform: "sine",
-          octave: -2,
-          semitone: 0,
-          detuneCents: 0,
-          level: 1,
-          sends: {
-            filter: 0,
-            insert: 0,
-            direct: 1,
-          },
-        },
-      ],
-      ampEnvelope: {
-        attackSeconds: 0.004,
-        decaySeconds: 0.1,
-        sustain: 1,
-        releaseSeconds: 0.16,
-      },
-      filter: {
-        enabled: true,
-        mode: "lowpass",
-        cutoffHz: 200,
-        resonance: 0.8,
-        sends: {
-          insert: 1,
-          direct: 0,
-        },
-      },
-      audioRateRoutes: [
-        {
-          type: "phaseModulation",
-          source: "modulator",
-          target: "carrier",
-          indexRadians: 2.8,
-        },
-      ],
-    },
-    {
-      id: "drive",
-      type: "saturator",
-      enabled: true,
-      driveDb: 24,
-      outputGainDb: -10,
-      mix: 0.85,
+      type: "stereoDelay",
+      timeSeconds: 0.095,
+      feedback: 0.2,
+      damping: 0.72,
+      pingPong: true,
+      mix: 0.1,
     },
   ],
 } satisfies Patch;

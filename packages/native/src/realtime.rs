@@ -202,7 +202,7 @@ impl RealtimeState {
             self.fatal_incoming = Some(PendingChain { generation, chain });
         } else {
             // Fatal mode stops command draining, so a second value is unreachable. Leaking is
-            // still safer than deallocating a graph on the callback thread.
+            // still safer than deallocating a chain on the callback thread.
             std::mem::forget(chain);
         }
     }
@@ -461,7 +461,7 @@ impl Drop for ErrorCallbackLease {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::patch::{parse_patch, DeviceSpec};
+    use crate::patch::parse_patch;
 
     fn spec(frequency: f32) -> crate::patch::PatchSpec {
         let mut patch = parse_patch(include_str!(concat!(
@@ -469,10 +469,7 @@ mod tests {
             "/../../fixtures/patches/valid/minimal.json"
         )))
         .unwrap();
-        let DeviceSpec::SubtractiveSynthV2(synth) = &mut patch.devices[0] else {
-            panic!("synth source")
-        };
-        synth.base_frequency_hz = frequency;
+        patch.source.frequency_hz = frequency;
         patch
     }
 
@@ -555,7 +552,7 @@ mod tests {
     fn mismatch_enters_persistent_fatal_silence() {
         let (mut transport, status, mut driver) = setup(1_000.0);
         let mut snapshot = spec(200.0).parameter_snapshot(1).unwrap();
-        snapshot.signature.device_count = 0;
+        snapshot.signature.effect_count = 7;
         transport
             .command_producer
             .push(Command::Parameter(snapshot))
@@ -723,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn active_queued_and_pending_graphs_drop_only_after_lease_release() {
+    fn active_queued_and_pending_chains_drop_only_after_lease_release() {
         use crate::devices::chain::DropProbe;
 
         let control_thread = std::thread::current().id();
@@ -782,50 +779,15 @@ mod tests {
         }
     }
 
-    fn maximum_v2() -> crate::patch::PatchSpec {
-        use crate::patch::{
-            EnvelopeSpec, ModulationRouteSpec, ModulatorSpec, RouteTarget, SaturatorSpec,
-        };
+    fn maximum_patch() -> crate::patch::PatchSpec {
+        use crate::patch::{EffectSpec, SaturatorSpec};
         let mut patch = parse_patch(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/patches/valid/all-routes.json"
+            "/../../fixtures/patches/valid/full-boundaries.json"
         )))
         .unwrap();
-        let envelope = EnvelopeSpec {
-            attack_seconds: 0.0,
-            decay_seconds: 0.1,
-            sustain: 0.5,
-            release_seconds: 0.1,
-        };
-        patch.modulators.push(ModulatorSpec::Envelope {
-            id: "extraA".to_owned(),
-            enabled: true,
-            envelope,
-        });
-        patch.modulators.push(ModulatorSpec::Envelope {
-            id: "extraB".to_owned(),
-            enabled: true,
-            envelope,
-        });
-        patch.modulation_routes.push(ModulationRouteSpec {
-            source: 2,
-            target: RouteTarget::OscillatorLevel(0),
-            amount: 0.2,
-        });
-        patch.modulation_routes.push(ModulationRouteSpec {
-            source: 3,
-            target: RouteTarget::OscillatorPitch(1),
-            amount: 7.0,
-        });
-        patch.modulation_routes.push(ModulationRouteSpec {
-            source: 3,
-            target: RouteTarget::SourceGain,
-            amount: -6.0,
-        });
-        for index in 0..6 {
-            patch.devices.push(DeviceSpec::Saturator(SaturatorSpec {
-                id: format!("bench{index}"),
-                enabled: true,
+        while patch.effects.len() < 7 {
+            patch.effects.push(EffectSpec::Saturator(SaturatorSpec {
                 drive_db: 12.0,
                 output_gain_db: -6.0,
                 mix: 0.5,
@@ -934,7 +896,7 @@ mod tests {
 
     #[test]
     #[ignore = "release-only callback execution/work budget benchmark"]
-    fn maximum_v2_callback_budget_matrix() {
+    fn maximum_patch_callback_budget_matrix() {
         assert!(
             !std::hint::black_box(cfg!(debug_assertions)),
             "callback work budget must run in release mode"
@@ -954,7 +916,7 @@ mod tests {
             percentile(&clock_overhead, 99),
             clock_overhead.last().unwrap()
         );
-        let spec = maximum_v2();
+        let spec = maximum_patch();
         for sample_rate in [48_000.0f32, 96_000.0] {
             for frames in [32usize, 64, 128] {
                 let active = Box::new(spec.prepare_chain(sample_rate).unwrap());

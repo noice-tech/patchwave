@@ -11,11 +11,10 @@
     "lint": "cargo clippy --manifest-path packages/native/Cargo.toml --all-targets -- -D warnings",
     "test": "pnpm --filter @patchwave/schema test && pnpm --filter @patchwave/cli test && pnpm test:native",
     "test:native": "cargo test --manifest-path packages/native/Cargo.toml",
-    "test:pm-reference": "cargo test --release --manifest-path packages/native/Cargo.toml devices::synth_v2::tests::sine_pm_matches_normative_64x_reference -- --ignored --exact",
-    "bench:callback": "cargo test --release --manifest-path packages/native/Cargo.toml realtime::tests::maximum_v2_callback_budget_matrix -- --ignored --exact --nocapture",
+    "bench:callback": "cargo test --release --manifest-path packages/native/Cargo.toml realtime::tests::maximum_patch_callback_budget_matrix -- --ignored --exact --nocapture",
     "check": "pnpm typecheck && pnpm fmt:check && pnpm lint",
     "validate": "pnpm build && pnpm check && pnpm test",
-    "validate:release": "pnpm validate && pnpm test:pm-reference && pnpm bench:callback",
+    "validate:release": "pnpm validate && pnpm bench:callback",
     "patchwave": "pnpm --filter @patchwave/cli patchwave"
   },
   "devDependencies": {

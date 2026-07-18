@@ -14,16 +14,19 @@ async function fixtures(kind: "valid" | "invalid"): Promise<Array<[string, unkno
   );
 }
 
-test("accepts every shared valid fixture and reconstructs canonical data", async () => {
+test("normalizes author forms to every canonical fixture", async () => {
   for (const [name, value] of await fixtures("valid")) {
-    const normalized = validatePatch(value);
-    assert.deepEqual(
-      Object.keys(normalized),
-      ["tempoBpm", "modulators", "modulationRoutes", "devices"],
-      name,
-    );
-    assert.notStrictEqual(normalized, value, name);
-    assert.notStrictEqual(normalized.devices, (value as { devices: unknown }).devices, name);
+    const author = structuredClone(value) as any;
+    if (author.source.filter === null) {
+      delete author.source.filter;
+    } else if (author.source.filter.cutoffLfo === null) {
+      delete author.source.filter.cutoffLfo;
+    }
+    const normalized = validatePatch(author);
+    assert.deepEqual(Object.keys(normalized), ["source", "effects"], name);
+    assert.notStrictEqual(normalized, author, name);
+    assert.notStrictEqual(normalized.source, author.source, name);
+    assert.deepEqual(normalized, value, name);
     assert.doesNotThrow(() => JSON.stringify(normalized), name);
   }
 });
@@ -34,65 +37,104 @@ test("rejects every shared invalid fixture", async () => {
   }
 });
 
-test("canonical serialization follows schema key order", async () => {
-  const [, value] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
-  const serialized = JSON.stringify(validatePatch(value));
+test("normalizes the minimal beginner patch with safe defaults", () => {
+  const normalized = validatePatch({
+    source: { frequencyHz: 110, oscillators: [{ waveform: "saw" }] },
+  });
+  assert.deepEqual(normalized, {
+    source: {
+      frequencyHz: 110,
+      gainDb: -12,
+      oscillators: [{ waveform: "saw", transposeSemitones: 0, detuneCents: 0, level: 1 }],
+      filter: null,
+      ampEnvelope: {
+        attackSeconds: 0.005,
+        decaySeconds: 0,
+        sustain: 1,
+        releaseSeconds: 0.1,
+      },
+    },
+    effects: [],
+  });
   assert.match(
-    serialized,
-    /^\{"tempoBpm":120,"modulators":\[\],"modulationRoutes":\[\],"devices":\[/,
+    JSON.stringify(normalized),
+    /^\{"source":\{"frequencyHz":110,"gainDb":-12,"oscillators":\[/,
   );
-  assert.match(serialized, /\{"id":"[^"]+","type":"subtractiveSynth","enabled":/);
 });
 
-test("rejects JavaScript-only unsafe values", async () => {
-  const [, base] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
-  const nonFinite = structuredClone(base) as any;
-  nonFinite.devices[0].baseFrequencyHz = Number.NaN;
-  assert.throws(() => validatePatch(nonFinite), /finite number/);
-  nonFinite.devices[0].baseFrequencyHz = Number.POSITIVE_INFINITY;
-  assert.throws(() => validatePatch(nonFinite), /finite number/);
-  nonFinite.devices[0].baseFrequencyHz = Number.NEGATIVE_INFINITY;
-  assert.throws(() => validatePatch(nonFinite), /finite number/);
+test("normalizes nested filter LFO, envelope, and effect defaults", () => {
+  const normalized = validatePatch({
+    source: {
+      frequencyHz: 55,
+      oscillators: [{ waveform: "pulse" }],
+      filter: {
+        cutoffHz: 220,
+        cutoffLfo: { rateHz: 2, amountOctaves: 3 },
+      },
+      ampEnvelope: { sustain: 0.8 },
+    },
+    effects: [
+      { type: "saturator", driveDb: 12 },
+      { type: "stereoDelay", timeSeconds: 0.1, mix: 0.2 },
+    ],
+  });
+  assert.deepEqual(normalized.source.oscillators[0], {
+    waveform: "pulse",
+    transposeSemitones: 0,
+    detuneCents: 0,
+    pulseWidth: 0.5,
+    level: 1,
+  });
+  assert.deepEqual(normalized.source.filter, {
+    mode: "lowpass",
+    cutoffHz: 220,
+    resonance: 0,
+    cutoffLfo: { shape: "sine", rateHz: 2, amountOctaves: 3 },
+  });
+  assert.deepEqual(normalized.effects, [
+    { type: "saturator", driveDb: 12, outputGainDb: 0, mix: 1 },
+    {
+      type: "stereoDelay",
+      timeSeconds: 0.1,
+      feedback: 0,
+      damping: 0,
+      pingPong: false,
+      mix: 0.2,
+    },
+  ]);
+});
 
-  const functionValue = structuredClone(base) as any;
-  functionValue.devices[0].enabled = () => true;
-  assert.throws(() => validatePatch(functionValue), /boolean/);
+test("rejects unsafe JavaScript values without invoking accessors", () => {
+  const base: any = { source: { frequencyHz: 110, oscillators: [{ waveform: "saw" }] } };
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const candidate = structuredClone(base);
+    candidate.source.frequencyHz = value;
+    assert.throws(() => validatePatch(candidate), /finite number/);
+  }
 
-  const symbolKey = structuredClone(base) as any;
+  const symbolKey = structuredClone(base);
   symbolKey[Symbol("hidden")] = true;
   assert.throws(() => validatePatch(symbolKey), /symbol keys/);
 
   let getterCalls = 0;
-  const accessor = structuredClone(base) as any;
-  Object.defineProperty(accessor.devices[0], "outputGain", {
+  const accessor = structuredClone(base);
+  Object.defineProperty(accessor.source, "frequencyHz", {
     enumerable: true,
     get() {
       getterCalls += 1;
-      return 0.5;
+      return 110;
     },
   });
   assert.throws(() => validatePatch(accessor), /data property/);
   assert.equal(getterCalls, 0);
 
-  const deviceAccessor = structuredClone(base) as any;
-  const firstDevice = deviceAccessor.devices[0];
-  Object.defineProperty(deviceAccessor.devices, "0", {
+  const oscillatorAccessor = structuredClone(base);
+  const oscillator = oscillatorAccessor.source.oscillators[0];
+  Object.defineProperty(oscillatorAccessor.source.oscillators, "0", {
     enumerable: true,
     get() {
       getterCalls += 1;
-      return firstDevice;
-    },
-  });
-  assert.throws(() => validatePatch(deviceAccessor), /data property/);
-  assert.equal(getterCalls, 0);
-
-  const oscillatorAccessor = structuredClone(base) as any;
-  const firstOscillator = oscillatorAccessor.devices[0].oscillators[0];
-  Object.defineProperty(oscillatorAccessor.devices[0].oscillators, "0", {
-    enumerable: true,
-    get() {
-      getterCalls += 1;
-      return firstOscillator;
+      return oscillator;
     },
   });
   assert.throws(() => validatePatch(oscillatorAccessor), /data property/);
@@ -103,99 +145,74 @@ test("rejects JavaScript-only unsafe values", async () => {
   assert.throws(() => validatePatch(inherited), /plain object/);
 });
 
-test("enforces count, integer, type, and precise paths", async () => {
-  const [, base] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
-  const tooMany = structuredClone(base) as any;
-  const processor = {
-    id: "fx",
-    type: "saturator",
-    enabled: true,
-    driveDb: 0,
-    outputGainDb: 0,
-    mix: 0,
+test("enforces counts, integer tuning, ranges, and strict keys", () => {
+  const tooMany = {
+    source: {
+      frequencyHz: 110,
+      oscillators: Array.from({ length: 5 }, () => ({ waveform: "sine" })),
+    },
   };
-  tooMany.devices = [
-    tooMany.devices[0],
-    ...Array.from({ length: 8 }, (_, index) => ({ ...processor, id: `fx${index}` })),
-  ];
-  assert.throws(() => validatePatch(tooMany), /1–8 items/);
+  assert.throws(() => validatePatch(tooMany), /1–4 items/);
 
-  const fractional = structuredClone(base) as any;
-  fractional.devices[0].oscillators[0].octave = 0.25;
-  assert.throws(() => validatePatch(fractional), /octave must be an integer/);
-
-  const wrongType = structuredClone(base) as any;
-  wrongType.devices[0].enabled = 1;
-  assert.throws(() => validatePatch(wrongType), /enabled must be a boolean/);
-
-  const feedback = structuredClone(base) as any;
-  feedback.devices = [
-    feedback.devices[0],
-    {
-      id: "delay",
-      type: "stereoDelay",
-      enabled: true,
-      timeMs: 10,
-      feedback: 0.96,
-      damping: 0,
-      pingPong: false,
-      mix: 0,
-    },
-  ];
-  assert.throws(() => validatePatch(feedback), /devices\[1\]\.feedback must be <= 0\.95/);
-});
-
-test("normalizes routes without mutating caller data", async () => {
-  const [, value] = (await fixtures("valid")).find(([name]) => name === "composable.json")!;
-  const input = structuredClone(value) as any;
-  assert.equal(input.modulationRoutes[0].source, "wobble");
-  const normalized = validatePatch(input);
-  assert.deepEqual(
-    normalized.modulationRoutes.map((route) => route.source),
-    ["pluck", "wobble"],
-  );
-  assert.equal(input.modulationRoutes[0].source, "wobble");
-  assert.notStrictEqual(normalized.modulators, input.modulators);
-  assert.notStrictEqual(normalized.devices[0].oscillators, input.devices[0].oscillators);
-  assert.match(JSON.stringify(normalized), /^\{"tempoBpm":140,"modulators":/);
-  assert.match(
-    JSON.stringify(normalized.devices[0].oscillators[0]),
-    /^\{"id":"carrier","waveform":"sine"/,
-  );
-});
-
-test("rejects unsafe and half-open current values", async () => {
-  const [, value] = (await fixtures("valid")).find(([name]) => name === "composable.json")!;
-  const phase = structuredClone(value) as any;
-  phase.modulators[0].phaseOffset = 1;
-  assert.throws(() => validatePatch(phase), /phaseOffset must be < 1/);
-
-  const nonFinite = structuredClone(value) as any;
-  nonFinite.modulationRoutes[0].amount = Number.NaN;
-  assert.throws(() => validatePatch(nonFinite), /finite number/);
-
-  let calls = 0;
-  const accessor = structuredClone(value) as any;
-  Object.defineProperty(accessor.devices[0].oscillators[0].sends, "direct", {
-    enumerable: true,
-    get() {
-      calls += 1;
-      return 0;
-    },
-  });
-  assert.throws(() => validatePatch(accessor), /data property/);
-  assert.equal(calls, 0);
-});
-
-test("rejects root version fields and the legacy patch shape", async () => {
-  const [, base] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
   assert.throws(
-    () => validatePatch({ version: 1, ...(base as object) }),
-    /patch\.version is unknown/,
+    () =>
+      validatePatch({
+        source: {
+          frequencyHz: 110,
+          oscillators: [{ waveform: "saw", transposeSemitones: 0.5 }],
+        },
+      }),
+    /must be an integer/,
   );
   assert.throws(
-    () => validatePatch({ version: 2, ...(base as object) }),
-    /patch\.version is unknown/,
+    () =>
+      validatePatch({
+        source: {
+          frequencyHz: 110,
+          oscillators: [{ waveform: "saw" }],
+          filter: {
+            cutoffHz: 220,
+            cutoffLfo: { rateHz: 2, amountOctaves: -0.1 },
+          },
+        },
+      }),
+    /amountOctaves must be >= 0/,
   );
-  assert.throws(() => validatePatch({ frequency: 440, gain: 0.1 }), /patch\.frequency is unknown/);
+  assert.throws(
+    () =>
+      validatePatch({
+        source: { frequencyHz: 110, oscillators: [{ waveform: "noise", detuneCents: 2 }] },
+      }),
+    /detuneCents is unknown/,
+  );
+  assert.throws(
+    () =>
+      validatePatch({
+        source: {
+          frequencyHz: 110,
+          oscillators: [{ waveform: "sine" }],
+          filter: null,
+        },
+      }),
+    /filter must be a plain object/,
+  );
+  assert.throws(
+    () =>
+      validatePatch({
+        source: {
+          frequencyHz: 110,
+          oscillators: [{ waveform: "sine" }],
+          filter: { cutoffHz: 220, cutoffLfo: null },
+        },
+      }),
+    /cutoffLfo must be a plain object/,
+  );
+  assert.throws(
+    () =>
+      validatePatch({
+        source: { frequencyHz: 110, oscillators: [{ waveform: "sine" }] },
+        unexpected: true,
+      }),
+    /patch\.unexpected is unknown/,
+  );
 });

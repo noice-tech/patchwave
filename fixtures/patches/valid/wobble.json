@@ -1,0 +1,34 @@
+{
+  "source": {
+    "frequencyHz": 55,
+    "gainDb": -14,
+    "oscillators": [
+      { "waveform": "saw", "transposeSemitones": 12, "detuneCents": -7, "level": 0.35 },
+      { "waveform": "saw", "transposeSemitones": 12, "detuneCents": 7, "level": 0.35 },
+      { "waveform": "sine", "transposeSemitones": 0, "detuneCents": 0, "level": 0.8 }
+    ],
+    "filter": {
+      "mode": "lowpass",
+      "cutoffHz": 220,
+      "resonance": 0.7,
+      "cutoffLfo": { "shape": "sine", "rateHz": 2.5, "amountOctaves": 2.5 }
+    },
+    "ampEnvelope": {
+      "attackSeconds": 0.005,
+      "decaySeconds": 0.1,
+      "sustain": 0.9,
+      "releaseSeconds": 0.15
+    }
+  },
+  "effects": [
+    { "type": "saturator", "driveDb": 18, "outputGainDb": -8, "mix": 0.8 },
+    {
+      "type": "stereoDelay",
+      "timeSeconds": 0.095,
+      "feedback": 0.2,
+      "damping": 0.72,
+      "pingPong": true,
+      "mix": 0.1
+    }
+  ]
+}
