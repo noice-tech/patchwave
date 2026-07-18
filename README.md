@@ -115,18 +115,18 @@ Validation is recursive and strict. Unknown or missing fields, unsupported devic
 
 ## Included examples
 
-| Example | Focus |
-| --- | --- |
-| [`classic-bass.ts`](./example/classic-bass.ts) | Classic subtractive bass voice |
-| [`dubstep-bass.ts`](./example/dubstep-bass.ts) | Tempo-synced wobble, pulse width, filtering, and phase modulation |
-| [`dubstep-growl.ts`](./example/dubstep-growl.ts) | Layered saw/sub growl with saturation and delay |
-| [`filter-pluck.ts`](./example/filter-pluck.ts) | Envelope-driven filter pluck |
-| [`filtered-effect-bypass.ts`](./example/filtered-effect-bypass.ts) | Filter and effect-bus routing |
-| [`fm-bell.ts`](./example/fm-bell.ts) | Sine phase-modulation bell tone |
-| [`pwm-lead.ts`](./example/pwm-lead.ts) | LFO pulse-width modulation |
-| [`sound.ts`](./example/sound.ts) | Compact starting patch |
-| [`tremolo-drone.ts`](./example/tremolo-drone.ts) | Source-gain modulation |
-| [`unfiltered-effect-source.ts`](./example/unfiltered-effect-source.ts) | Insert routing without filter coloration |
+| Example                                                                | Focus                                                             |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [`classic-bass.ts`](./example/classic-bass.ts)                         | Classic subtractive bass voice                                    |
+| [`dubstep-bass.ts`](./example/dubstep-bass.ts)                         | Tempo-synced wobble, pulse width, filtering, and phase modulation |
+| [`dubstep-growl.ts`](./example/dubstep-growl.ts)                       | Layered saw/sub growl with saturation and delay                   |
+| [`filter-pluck.ts`](./example/filter-pluck.ts)                         | Envelope-driven filter pluck                                      |
+| [`filtered-effect-bypass.ts`](./example/filtered-effect-bypass.ts)     | Filter and effect-bus routing                                     |
+| [`fm-bell.ts`](./example/fm-bell.ts)                                   | Sine phase-modulation bell tone                                   |
+| [`pwm-lead.ts`](./example/pwm-lead.ts)                                 | LFO pulse-width modulation                                        |
+| [`sound.ts`](./example/sound.ts)                                       | Compact starting patch                                            |
+| [`tremolo-drone.ts`](./example/tremolo-drone.ts)                       | Source-gain modulation                                            |
+| [`unfiltered-effect-source.ts`](./example/unfiltered-effect-source.ts) | Insert routing without filter coloration                          |
 
 Run any example by replacing the final path in the quick-start command.
 

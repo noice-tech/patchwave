@@ -70,10 +70,7 @@ test("loads a CommonJS default wrapper", async () => {
   const directory = await mkdtemp(join(tmpdir(), "patchwave-cjs-"));
   const path = join(directory, "sound.cts");
   try {
-    await writeFile(
-      path,
-      `module.exports = { default: ${JSON.stringify(patch(330))} };\n`,
-    );
+    await writeFile(path, `module.exports = { default: ${JSON.stringify(patch(330))} };\n`);
     const loaded = await loadPatch(path);
     assert.equal(loaded.patch.devices[0].baseFrequencyHz, 330);
   } finally {
@@ -82,10 +79,7 @@ test("loads a CommonJS default wrapper", async () => {
 });
 
 test("rejects legacy and versioned exports", () => {
-  assert.throws(
-    () => normalizePatchExport({ frequency: 440, gain: 0.1 }),
-    /unknown|required/,
-  );
+  assert.throws(() => normalizePatchExport({ frequency: 440, gain: 0.1 }), /unknown|required/);
   assert.throws(
     () => normalizePatchExport({ version: 2, ...patch() }),
     /patch\.version is unknown/,
@@ -107,9 +101,17 @@ test("rejects accessors without invoking them", () => {
 });
 
 test("normalizes and summarizes a current patch", async () => {
-  const value = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../fixtures/patches/valid/composable.json"), "utf8"));
+  const value = JSON.parse(
+    await readFile(
+      resolve(import.meta.dirname, "../../../fixtures/patches/valid/composable.json"),
+      "utf8",
+    ),
+  );
   const loaded = normalizePatchExport(value);
   assert.match(loaded.summary, /^140 BPM; 2 modulators; 2 routes;/);
   assert.equal(loaded.serialized, JSON.stringify(loaded.patch));
-  assert.deepEqual(loaded.patch.modulationRoutes.map((route) => route.source), ["pluck", "wobble"]);
+  assert.deepEqual(
+    loaded.patch.modulationRoutes.map((route) => route.source),
+    ["pluck", "wobble"],
+  );
 });

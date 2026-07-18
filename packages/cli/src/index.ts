@@ -10,10 +10,7 @@ async function createNativeEngine(): Promise<CliAudioEngine> {
 
 async function loadAudioEngineConstructor(): Promise<AudioEngineConstructor> {
   try {
-    const addon = (await import("@patchwave/native")) as unknown as Record<
-      string,
-      unknown
-    >;
+    const addon = (await import("@patchwave/native")) as unknown as Record<string, unknown>;
     const defaultExport = isRecord(addon.default) ? addon.default : undefined;
     const audioEngineExport = addon.AudioEngine ?? defaultExport?.AudioEngine;
     if (typeof audioEngineExport !== "function") {

@@ -100,7 +100,13 @@ function loaded(): LoadedPatch {
           },
         ],
         ampEnvelope: { attackSeconds: 0, decaySeconds: 0, sustain: 1, releaseSeconds: 0 },
-        filter: { enabled: false, mode: "lowpass", cutoffHz: 20_000, resonance: 0, sends: { insert: 1, direct: 0 } },
+        filter: {
+          enabled: false,
+          mode: "lowpass",
+          cutoffHz: 20_000,
+          resonance: 0,
+          sends: { insert: 1, direct: 0 },
+        },
         audioRateRoutes: [],
       },
     ],
@@ -172,7 +178,10 @@ test("fake TTY drives one patch call, gate toggle, q, and cleanup", async () => 
   assert.deepEqual(harness.input.rawChanges, [true, false]);
   assert.equal(harness.input.resumed, false);
   assert.equal(harness.watcher.closed, true);
-  assert.match(harness.output.logs.join("\n"), /Chain: 120 BPM; 0 modulators; 0 routes; subtractiveSynth#voice/);
+  assert.match(
+    harness.output.logs.join("\n"),
+    /Chain: 120 BPM; 0 modulators; 0 routes; subtractiveSynth#voice/,
+  );
 });
 
 test("raw Ctrl+C and SIGTERM both use the normal cleanup path", async () => {

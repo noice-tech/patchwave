@@ -1,9 +1,5 @@
 import { pathToFileURL } from "node:url";
-import {
-  PATCH_JSON_MAX_BYTES,
-  validatePatch,
-  type Patch,
-} from "@patchwave/schema";
+import { PATCH_JSON_MAX_BYTES, validatePatch, type Patch } from "@patchwave/schema";
 import { tsImport } from "tsx/esm/api";
 
 export type LoadedPatch = {
@@ -13,10 +9,7 @@ export type LoadedPatch = {
 };
 
 export async function loadPatch(configPath: string): Promise<LoadedPatch> {
-  const moduleNamespace: unknown = await tsImport(
-    pathToFileURL(configPath).href,
-    import.meta.url,
-  );
+  const moduleNamespace: unknown = await tsImport(pathToFileURL(configPath).href, import.meta.url);
   return normalizePatchExport(readDefaultExport(moduleNamespace));
 }
 
@@ -25,9 +18,7 @@ export function normalizePatchExport(exported: unknown): LoadedPatch {
   const serialized = JSON.stringify(patch);
   const byteLength = Buffer.byteLength(serialized, "utf8");
   if (byteLength > PATCH_JSON_MAX_BYTES) {
-    throw new Error(
-      `Serialized patch must be at most ${PATCH_JSON_MAX_BYTES} UTF-8 bytes`,
-    );
+    throw new Error(`Serialized patch must be at most ${PATCH_JSON_MAX_BYTES} UTF-8 bytes`);
   }
   return {
     patch,
@@ -43,9 +34,7 @@ function readDefaultExport(moduleNamespace: unknown): unknown {
 
   const exported = moduleNamespace.default;
   const isCommonJsWrapper =
-    "module.exports" in moduleNamespace &&
-    isRecord(exported) &&
-    Object.hasOwn(exported, "default");
+    "module.exports" in moduleNamespace && isRecord(exported) && Object.hasOwn(exported, "default");
 
   return isCommonJsWrapper ? exported.default : exported;
 }

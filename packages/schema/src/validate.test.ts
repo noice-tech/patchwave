@@ -17,7 +17,11 @@ async function fixtures(kind: "valid" | "invalid"): Promise<Array<[string, unkno
 test("accepts every shared valid fixture and reconstructs canonical data", async () => {
   for (const [name, value] of await fixtures("valid")) {
     const normalized = validatePatch(value);
-    assert.deepEqual(Object.keys(normalized), ["tempoBpm", "modulators", "modulationRoutes", "devices"], name);
+    assert.deepEqual(
+      Object.keys(normalized),
+      ["tempoBpm", "modulators", "modulationRoutes", "devices"],
+      name,
+    );
     assert.notStrictEqual(normalized, value, name);
     assert.notStrictEqual(normalized.devices, (value as { devices: unknown }).devices, name);
     assert.doesNotThrow(() => JSON.stringify(normalized), name);
@@ -33,7 +37,10 @@ test("rejects every shared invalid fixture", async () => {
 test("canonical serialization follows schema key order", async () => {
   const [, value] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
   const serialized = JSON.stringify(validatePatch(value));
-  assert.match(serialized, /^\{"tempoBpm":120,"modulators":\[\],"modulationRoutes":\[\],"devices":\[/);
+  assert.match(
+    serialized,
+    /^\{"tempoBpm":120,"modulators":\[\],"modulationRoutes":\[\],"devices":\[/,
+  );
   assert.match(serialized, /\{"id":"[^"]+","type":"subtractiveSynth","enabled":/);
 });
 
@@ -107,7 +114,10 @@ test("enforces count, integer, type, and precise paths", async () => {
     outputGainDb: 0,
     mix: 0,
   };
-  tooMany.devices = [tooMany.devices[0], ...Array.from({ length: 8 }, (_, index) => ({ ...processor, id: `fx${index}` }))];
+  tooMany.devices = [
+    tooMany.devices[0],
+    ...Array.from({ length: 8 }, (_, index) => ({ ...processor, id: `fx${index}` })),
+  ];
   assert.throws(() => validatePatch(tooMany), /1–8 items/);
 
   const fractional = structuredClone(base) as any;
@@ -132,10 +142,7 @@ test("enforces count, integer, type, and precise paths", async () => {
       mix: 0,
     },
   ];
-  assert.throws(
-    () => validatePatch(feedback),
-    /devices\[1\]\.feedback must be <= 0\.95/,
-  );
+  assert.throws(() => validatePatch(feedback), /devices\[1\]\.feedback must be <= 0\.95/);
 });
 
 test("normalizes routes without mutating caller data", async () => {
@@ -143,12 +150,18 @@ test("normalizes routes without mutating caller data", async () => {
   const input = structuredClone(value) as any;
   assert.equal(input.modulationRoutes[0].source, "wobble");
   const normalized = validatePatch(input);
-  assert.deepEqual(normalized.modulationRoutes.map((route) => route.source), ["pluck", "wobble"]);
+  assert.deepEqual(
+    normalized.modulationRoutes.map((route) => route.source),
+    ["pluck", "wobble"],
+  );
   assert.equal(input.modulationRoutes[0].source, "wobble");
   assert.notStrictEqual(normalized.modulators, input.modulators);
   assert.notStrictEqual(normalized.devices[0].oscillators, input.devices[0].oscillators);
   assert.match(JSON.stringify(normalized), /^\{"tempoBpm":140,"modulators":/);
-  assert.match(JSON.stringify(normalized.devices[0].oscillators[0]), /^\{"id":"carrier","waveform":"sine"/);
+  assert.match(
+    JSON.stringify(normalized.devices[0].oscillators[0]),
+    /^\{"id":"carrier","waveform":"sine"/,
+  );
 });
 
 test("rejects unsafe and half-open current values", async () => {
@@ -165,7 +178,10 @@ test("rejects unsafe and half-open current values", async () => {
   const accessor = structuredClone(value) as any;
   Object.defineProperty(accessor.devices[0].oscillators[0].sends, "direct", {
     enumerable: true,
-    get() { calls += 1; return 0; },
+    get() {
+      calls += 1;
+      return 0;
+    },
   });
   assert.throws(() => validatePatch(accessor), /data property/);
   assert.equal(calls, 0);
@@ -173,7 +189,13 @@ test("rejects unsafe and half-open current values", async () => {
 
 test("rejects root version fields and the legacy patch shape", async () => {
   const [, base] = (await fixtures("valid")).find(([name]) => name === "minimal.json")!;
-  assert.throws(() => validatePatch({ version: 1, ...(base as object) }), /patch\.version is unknown/);
-  assert.throws(() => validatePatch({ version: 2, ...(base as object) }), /patch\.version is unknown/);
+  assert.throws(
+    () => validatePatch({ version: 1, ...(base as object) }),
+    /patch\.version is unknown/,
+  );
+  assert.throws(
+    () => validatePatch({ version: 2, ...(base as object) }),
+    /patch\.version is unknown/,
+  );
   assert.throws(() => validatePatch({ frequency: 440, gain: 0.1 }), /patch\.frequency is unknown/);
 });

@@ -28,11 +28,7 @@ export function setupKeyboard(
     for (const character of chunk.toString()) {
       if (character === " ") {
         onToggle();
-      } else if (
-        character === "q" ||
-        character === "Q" ||
-        character === "\u0003"
-      ) {
+      } else if (character === "q" || character === "Q" || character === "\u0003") {
         onQuit();
         return;
       }

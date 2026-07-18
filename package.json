@@ -3,14 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.1.2",
-  "engines": {
-    "node": ">=24"
-  },
   "scripts": {
     "build": "pnpm --filter @patchwave/schema build && pnpm typecheck && pnpm --filter @patchwave/native build && pnpm --filter @patchwave/cli build",
     "typecheck": "pnpm exec tsc --noEmit -p tsconfig.json",
-    "fmt:check": "cargo fmt --check --manifest-path packages/native/Cargo.toml",
+    "fmt": "oxfmt && cargo fmt --manifest-path packages/native/Cargo.toml",
+    "fmt:check": "oxfmt --check && cargo fmt --check --manifest-path packages/native/Cargo.toml",
     "lint": "cargo clippy --manifest-path packages/native/Cargo.toml --all-targets -- -D warnings",
     "test": "pnpm --filter @patchwave/schema test && pnpm --filter @patchwave/cli test && pnpm test:native",
     "test:native": "cargo test --manifest-path packages/native/Cargo.toml",
@@ -24,6 +21,11 @@
   "devDependencies": {
     "@patchwave/schema": "workspace:*",
     "@types/node": "24.13.3",
+    "oxfmt": "^0.59.0",
     "typescript": "7.0.2"
-  }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.1.2"
 }

@@ -2,12 +2,18 @@
   "name": "@patchwave/native",
   "version": "0.0.0",
   "private": true,
-  "main": "index.js",
-  "types": "index.d.ts",
   "files": [
     "index.js",
     "index.d.ts"
   ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.7.3"
+  },
   "napi": {
     "binaryName": "patchwave-native",
     "targets": [
@@ -18,11 +24,5 @@
       "aarch64-unknown-linux-gnu",
       "x86_64-unknown-linux-gnu"
     ]
-  },
-  "scripts": {
-    "build": "napi build --platform --release"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "3.7.3"
   }
 }

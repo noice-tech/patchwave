@@ -64,8 +64,7 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
     (async (path: string) => (await stat(path).catch(() => undefined))?.isFile() === true);
   const signals = dependencies.signals ?? process;
   const logger = dependencies.logger ?? console;
-  const setExitCode =
-    dependencies.setExitCode ?? ((code: number) => (process.exitCode = code));
+  const setExitCode = dependencies.setExitCode ?? ((code: number) => (process.exitCode = code));
 
   let engine: CliAudioEngine | undefined;
   let watcher: WatcherLike | undefined;
@@ -151,9 +150,7 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
       engine: activeEngine,
       onApplied: (loaded) => printPatch(loaded, logger),
       onError: (error, retained) => {
-        logger.error(
-          `Patch reload failed: ${errorMessage(error)}. Keeping ${retained.summary}.`,
-        );
+        logger.error(`Patch reload failed: ${errorMessage(error)}. Keeping ${retained.summary}.`);
       },
     });
 

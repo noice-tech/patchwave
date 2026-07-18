@@ -32,8 +32,25 @@ export type FilterMode = "lowpass" | "bandpass" | "highpass";
 
 export type Sends = { filter: number; insert: number; direct: number };
 export type OscillatorV2 =
-  | { id: string; waveform: TonalWaveform; octave: number; semitone: number; detuneCents: number; level: number; sends: Sends }
-  | { id: string; waveform: "pulse"; octave: number; semitone: number; detuneCents: number; pulseWidth: number; level: number; sends: Sends }
+  | {
+      id: string;
+      waveform: TonalWaveform;
+      octave: number;
+      semitone: number;
+      detuneCents: number;
+      level: number;
+      sends: Sends;
+    }
+  | {
+      id: string;
+      waveform: "pulse";
+      octave: number;
+      semitone: number;
+      detuneCents: number;
+      pulseWidth: number;
+      level: number;
+      sends: Sends;
+    }
   | { id: string; waveform: "noise"; level: number; sends: Sends };
 
 export type SynthFilterV2 = {
@@ -66,7 +83,9 @@ export type LfoModulatorV2 = {
   enabled: boolean;
   shape: "sine" | "triangle" | "sawUp" | "sawDown" | "square";
   polarity: "unipolar" | "bipolar";
-  rate: { mode: "hz"; frequencyHz: number } | { mode: "sync"; division: "1/1" | "1/2" | "1/4" | "1/8" | "1/16" };
+  rate:
+    | { mode: "hz"; frequencyHz: number }
+    | { mode: "sync"; division: "1/1" | "1/2" | "1/4" | "1/8" | "1/16" };
   phaseMode: "free" | "gateReset";
   phaseOffset: number;
 };
@@ -76,12 +95,29 @@ export type ModulatorV2 = LfoModulatorV2 | EnvelopeModulatorV2;
 
 export type ModulationRouteV2 =
   | { source: string; target: { type: "filterCutoff"; device: string }; amountOctaves: number }
-  | { source: string; target: { type: "oscillatorPitch"; device: string; oscillator: string }; amountSemitones: number }
-  | { source: string; target: { type: "pulseWidth"; device: string; oscillator: string }; amount: number }
-  | { source: string; target: { type: "oscillatorLevel"; device: string; oscillator: string }; amount: number }
+  | {
+      source: string;
+      target: { type: "oscillatorPitch"; device: string; oscillator: string };
+      amountSemitones: number;
+    }
+  | {
+      source: string;
+      target: { type: "pulseWidth"; device: string; oscillator: string };
+      amount: number;
+    }
+  | {
+      source: string;
+      target: { type: "oscillatorLevel"; device: string; oscillator: string };
+      amount: number;
+    }
   | { source: string; target: { type: "sourceGain"; device: string }; amountDb: number };
 
-export type PhaseModulationRouteV2 = { type: "phaseModulation"; source: string; target: string; indexRadians: number };
+export type PhaseModulationRouteV2 = {
+  type: "phaseModulation";
+  source: string;
+  target: string;
+  indexRadians: number;
+};
 
 export type PatchV2 = {
   tempoBpm: number;
