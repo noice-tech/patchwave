@@ -1,0 +1,77 @@
+{
+  "tempoBpm": 120,
+  "modulators": [
+    {
+      "id": "l",
+      "type": "lfo",
+      "enabled": true,
+      "shape": "sine",
+      "polarity": "unipolar",
+      "rate": {
+        "mode": "hz",
+        "frequencyHz": 1
+      },
+      "phaseMode": "free",
+      "phaseOffset": 0
+    }
+  ],
+  "modulationRoutes": [
+    {
+      "source": "l",
+      "target": {
+        "type": "sourceGain",
+        "device": "voice"
+      },
+      "amountDb": 1
+    },
+    {
+      "source": "l",
+      "target": {
+        "type": "sourceGain",
+        "device": "voice"
+      },
+      "amountDb": 2
+    }
+  ],
+  "devices": [
+    {
+      "id": "voice",
+      "type": "subtractiveSynth",
+      "enabled": true,
+      "baseFrequencyHz": 100,
+      "outputGain": 0.2,
+      "oscillators": [
+        {
+          "id": "a",
+          "waveform": "sine",
+          "octave": 0,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 1,
+          "sends": {
+            "filter": 0,
+            "insert": 1,
+            "direct": 0
+          }
+        }
+      ],
+      "ampEnvelope": {
+        "attackSeconds": 0,
+        "decaySeconds": 0,
+        "sustain": 1,
+        "releaseSeconds": 0
+      },
+      "filter": {
+        "enabled": false,
+        "mode": "lowpass",
+        "cutoffHz": 1000,
+        "resonance": 0,
+        "sends": {
+          "insert": 1,
+          "direct": 0
+        }
+      },
+      "audioRateRoutes": []
+    }
+  ]
+}

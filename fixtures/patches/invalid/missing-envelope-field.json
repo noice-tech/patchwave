@@ -1,0 +1,42 @@
+{
+  "devices": [
+    {
+      "id": "synth",
+      "type": "subtractiveSynth",
+      "enabled": true,
+      "baseFrequencyHz": 440,
+      "outputGain": 0.1,
+      "oscillators": [
+        {
+          "id": "osc1",
+          "waveform": "noise",
+          "level": 0.1,
+          "sends": {
+            "filter": 1,
+            "insert": 0,
+            "direct": 0
+          }
+        }
+      ],
+      "ampEnvelope": {
+        "attackSeconds": 0,
+        "decaySeconds": 0,
+        "sustain": 1
+      },
+      "filter": {
+        "enabled": false,
+        "mode": "lowpass",
+        "cutoffHz": 20000,
+        "resonance": 0,
+        "sends": {
+          "insert": 1,
+          "direct": 0
+        }
+      },
+      "audioRateRoutes": []
+    }
+  ],
+  "tempoBpm": 120,
+  "modulators": [],
+  "modulationRoutes": []
+}

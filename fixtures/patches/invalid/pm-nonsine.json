@@ -1,0 +1,66 @@
+{
+  "tempoBpm": 120,
+  "modulators": [],
+  "modulationRoutes": [],
+  "devices": [
+    {
+      "id": "voice",
+      "type": "subtractiveSynth",
+      "enabled": true,
+      "baseFrequencyHz": 100,
+      "outputGain": 0.2,
+      "oscillators": [
+        {
+          "id": "a",
+          "waveform": "saw",
+          "octave": 0,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 1,
+          "sends": {
+            "filter": 0,
+            "insert": 1,
+            "direct": 0
+          }
+        },
+        {
+          "id": "b",
+          "waveform": "sine",
+          "octave": 0,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 0,
+          "sends": {
+            "filter": 0,
+            "insert": 0,
+            "direct": 0
+          }
+        }
+      ],
+      "ampEnvelope": {
+        "attackSeconds": 0,
+        "decaySeconds": 0,
+        "sustain": 1,
+        "releaseSeconds": 0
+      },
+      "filter": {
+        "enabled": false,
+        "mode": "lowpass",
+        "cutoffHz": 1000,
+        "resonance": 0,
+        "sends": {
+          "insert": 1,
+          "direct": 0
+        }
+      },
+      "audioRateRoutes": [
+        {
+          "type": "phaseModulation",
+          "source": "a",
+          "target": "b",
+          "indexRadians": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "tempoBpm": 140,
+  "modulators": [
+    {
+      "id": "wobble",
+      "type": "lfo",
+      "enabled": true,
+      "shape": "sine",
+      "polarity": "unipolar",
+      "rate": {
+        "mode": "sync",
+        "division": "1/8"
+      },
+      "phaseMode": "gateReset",
+      "phaseOffset": 0
+    },
+    {
+      "id": "pluck",
+      "type": "envelope",
+      "enabled": true,
+      "attackSeconds": 0,
+      "decaySeconds": 0.2,
+      "sustain": 0,
+      "releaseSeconds": 0.1
+    }
+  ],
+  "modulationRoutes": [
+    {
+      "source": "wobble",
+      "target": {
+        "type": "pulseWidth",
+        "device": "voice",
+        "oscillator": "carrier"
+      },
+      "amount": 0.3
+    },
+    {
+      "source": "pluck",
+      "target": {
+        "type": "filterCutoff",
+        "device": "voice"
+      },
+      "amountOctaves": 4
+    }
+  ],
+  "devices": [
+    {
+      "id": "voice",
+      "type": "subtractiveSynth",
+      "enabled": true,
+      "baseFrequencyHz": 55,
+      "outputGain": 0.18,
+      "oscillators": [
+        {
+          "id": "carrier",
+          "waveform": "sine",
+          "octave": -1,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 0.8,
+          "sends": {
+            "filter": 1,
+            "insert": 0,
+            "direct": 0
+          }
+        },
+        {
+          "id": "modulator",
+          "waveform": "sine",
+          "octave": 3,
+          "semitone": 1,
+          "detuneCents": 0,
+          "level": 0,
+          "sends": {
+            "filter": 0,
+            "insert": 0,
+            "direct": 0
+          }
+        },
+        {
+          "id": "bite",
+          "waveform": "pulse",
+          "octave": -1,
+          "semitone": 0,
+          "detuneCents": 0,
+          "pulseWidth": 0.5,
+          "level": 0.65,
+          "sends": {
+            "filter": 1,
+            "insert": 0,
+            "direct": 0
+          }
+        },
+        {
+          "id": "sub",
+          "waveform": "sine",
+          "octave": 0,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 0.7,
+          "sends": {
+            "filter": 0,
+            "insert": 0,
+            "direct": 1
+          }
+        }
+      ],
+      "ampEnvelope": {
+        "attackSeconds": 0.004,
+        "decaySeconds": 0.1,
+        "sustain": 1,
+        "releaseSeconds": 0.16
+      },
+      "filter": {
+        "enabled": true,
+        "mode": "lowpass",
+        "cutoffHz": 120,
+        "resonance": 0.8,
+        "sends": {
+          "insert": 1,
+          "direct": 0
+        }
+      },
+      "audioRateRoutes": [
+        {
+          "type": "phaseModulation",
+          "source": "modulator",
+          "target": "carrier",
+          "indexRadians": 2.8
+        }
+      ]
+    },
+    {
+      "id": "drive",
+      "type": "saturator",
+      "enabled": true,
+      "driveDb": 24,
+      "outputGainDb": -10,
+      "mix": 0.85
+    }
+  ]
+}

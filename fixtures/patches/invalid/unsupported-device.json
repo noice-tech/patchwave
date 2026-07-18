@@ -1,0 +1,12 @@
+{
+  "devices": [
+    {
+      "id": "verb",
+      "type": "reverb",
+      "enabled": true
+    }
+  ],
+  "tempoBpm": 120,
+  "modulators": [],
+  "modulationRoutes": []
+}

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "tempoBpm": 120,
+  "modulators": [],
+  "modulationRoutes": [],
+  "devices": [
+    {
+      "id": "voice",
+      "type": "subtractiveSynth",
+      "enabled": true,
+      "baseFrequencyHz": 440,
+      "outputGain": 0.1,
+      "oscillators": [
+        {
+          "id": "osc",
+          "waveform": "sine",
+          "octave": 0,
+          "semitone": 0,
+          "detuneCents": 0,
+          "level": 1,
+          "sends": {
+            "filter": 1,
+            "insert": 0,
+            "direct": 0
+          }
+        }
+      ],
+      "ampEnvelope": {
+        "attackSeconds": 0,
+        "decaySeconds": 0,
+        "sustain": 1,
+        "releaseSeconds": 0
+      },
+      "filter": {
+        "enabled": false,
+        "mode": "lowpass",
+        "cutoffHz": 20000,
+        "resonance": 0,
+        "sends": {
+          "insert": 1,
+          "direct": 0
+        }
+      },
+      "audioRateRoutes": []
+    }
+  ]
+}
