@@ -14,7 +14,7 @@ concurrency:
 jobs:
   validate:
     name: Validate
-    runs-on: macos-14
+    runs-on: ubicloud-standard-2
     timeout-minutes: 20
 
     steps:
@@ -37,6 +37,9 @@ jobs:
         with:
           toolchain: 1.88.0
           components: rustfmt, clippy
+
+      - name: Install Linux audio dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev pkg-config
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
