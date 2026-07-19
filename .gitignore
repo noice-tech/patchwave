@@ -2,6 +2,7 @@ node_modules/
 packages/*/node_modules/
 packages/native/target/
 packages/native/*.node
+packages/studio/dist/
 .pi-subagents/
 .DS_Store
 *.log

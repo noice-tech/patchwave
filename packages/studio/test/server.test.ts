@@ -39,6 +39,13 @@ test("serves capability-scoped assets with restrictive headers", async () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'none'/);
     assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    const html = await response.text();
+    const script = html.match(/src="(\.\/assets\/[^"]+\.js)"/)?.[1];
+    assert.ok(script);
+    const scriptResponse = await fetch(new URL(script, server.url));
+    assert.equal(scriptResponse.status, 200);
+    assert.match(scriptResponse.headers.get("content-type") ?? "", /javascript/);
+    assert.equal((await fetch(new URL(".vite/manifest.json", server.url))).status, 404);
     assert.equal((await fetch(new URL("missing", server.url))).status, 404);
   } finally {
     await server.close();
@@ -108,7 +115,9 @@ test("accepts one strict same-origin controller and releases on malformed input"
   const inputs: StudioInput[] = [];
   let releases = 0;
   const server = await startStudioServer({
-    onInput: (input) => inputs.push(input),
+    onInput: (input) => {
+      inputs.push(input);
+    },
     onControllerClosed: () => {
       releases += 1;
     },
@@ -134,7 +143,9 @@ test("malformed then valid pipelined messages cannot reacquire released control"
   const inputs: StudioInput[] = [];
   let releases = 0;
   const server = await startStudioServer({
-    onInput: (input) => inputs.push(input),
+    onInput: (input) => {
+      inputs.push(input);
+    },
     onControllerClosed: () => {
       releases += 1;
     },
@@ -157,7 +168,9 @@ test("rejects unknown key codes, binary messages, and oversized payloads", async
   const inputs: StudioInput[] = [];
   let releases = 0;
   const server = await startStudioServer({
-    onInput: (input) => inputs.push(input),
+    onInput: (input) => {
+      inputs.push(input);
+    },
     onControllerClosed: () => {
       releases += 1;
     },
@@ -220,6 +233,184 @@ test("rejects a cross-origin WebSocket upgrade", async () => {
   try {
     const target = new URL("socket", server.url);
     assert.equal(await rejectedStatus(target, "https://example.com"), 403);
+  } finally {
+    await server.close();
+  }
+});
+
+test("sends reliable edit acknowledgements independently of coalesced runtime state", async () => {
+  const revision = "a".repeat(64);
+  const server = await startStudioServer({
+    onInput: (input) =>
+      input.type === "undo"
+        ? {
+            type: "editResult" as const,
+            protocol: 1 as const,
+            requestId: input.requestId,
+            status: "rejected" as const,
+            revision,
+            message: "Nothing to undo",
+          }
+        : undefined,
+    onControllerClosed: () => undefined,
+    getState: () => ({ frame: 0 }),
+  });
+  const socket = await openSocket(server.url);
+  const messages: any[] = [];
+  socket.on("message", (data) => messages.push(JSON.parse(data.toString())));
+  try {
+    socket.send(
+      JSON.stringify({ type: "undo", protocol: 1, requestId: "undo-1", baseRevision: revision }),
+    );
+    for (
+      let attempt = 0;
+      attempt < 30 && !messages.some((message) => message.type === "editResult");
+      attempt += 1
+    )
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.deepEqual(
+      messages.find((message) => message.type === "editResult"),
+      {
+        type: "editResult",
+        protocol: 1,
+        requestId: "undo-1",
+        status: "rejected",
+        revision,
+        message: "Nothing to undo",
+      },
+    );
+  } finally {
+    socket.close();
+    await server.close();
+  }
+});
+
+test("malformed edit followed by a valid commit cannot reach write authority", async () => {
+  const inputs: StudioInput[] = [];
+  const revision = "a".repeat(64);
+  const server = await startStudioServer({
+    onInput: (input) => {
+      inputs.push(input);
+    },
+    onControllerClosed: () => undefined,
+    getState: () => ({}),
+  });
+  try {
+    const socket = await openSocket(server.url);
+    const closePromise = closed(socket);
+    socket.send(
+      JSON.stringify({
+        type: "commit",
+        protocol: 1,
+        requestId: "bad",
+        gestureId: null,
+        baseRevision: revision,
+        operation: { type: "setField", path: ["source", "gainDb"], value: -12 },
+        source: "export default evil",
+      }),
+    );
+    socket.send(
+      JSON.stringify({
+        type: "commit",
+        protocol: 1,
+        requestId: "good",
+        gestureId: null,
+        baseRevision: revision,
+        operation: { type: "setField", path: ["source", "gainDb"], value: -12 },
+      }),
+    );
+    await closePromise;
+    assert.deepEqual(inputs, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("synchronous input and cleanup throws fail closed before pipelined input", async () => {
+  let releases = 0;
+  const inputs: StudioInput[] = [];
+  const server = await startStudioServer({
+    onInput: (input) => {
+      inputs.push(input);
+      if (inputs.length === 1) throw new Error("sync boom");
+    },
+    onControllerClosed: () => {
+      releases += 1;
+      throw new Error("cleanup boom");
+    },
+    getState: () => ({ ready: true }),
+  });
+  try {
+    const first = await openSocket(server.url);
+    const firstClosed = closed(first);
+    first.send(JSON.stringify({ type: "releaseAll" }));
+    first.send(JSON.stringify({ type: "keyDown", code: "KeyA" }));
+    await firstClosed;
+    assert.equal(releases, 1);
+    assert.deepEqual(inputs, [{ type: "releaseAll" }]);
+    const replacement = await openSocket(server.url);
+    const replacementClosed = closed(replacement);
+    server.disconnect();
+    await replacementClosed;
+    assert.equal(releases, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test("oversized or unserializable outbound state releases the controller", async () => {
+  let state: unknown = { ready: true };
+  let releases = 0;
+  const server = await startStudioServer({
+    onInput: () => ({ type: "state", state }) as const,
+    onControllerClosed: () => {
+      releases += 1;
+    },
+    getState: () => ({ ready: true }),
+  });
+  try {
+    const oversized = await openSocket(server.url);
+    const oversizedClosed = closed(oversized);
+    state = { text: "x".repeat(70_000) };
+    oversized.send(JSON.stringify({ type: "releaseAll" }));
+    await oversizedClosed;
+    assert.equal(releases, 1);
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    const second = await openSocket(server.url);
+    const secondClosed = closed(second);
+    state = cyclic;
+    second.send(JSON.stringify({ type: "releaseAll" }));
+    await secondClosed;
+    assert.equal(releases, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test("unserializable initial state releases authority and allows a replacement", async () => {
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  let state: unknown = cyclic;
+  let releases = 0;
+  const server = await startStudioServer({
+    onInput: () => undefined,
+    onControllerClosed: () => {
+      releases += 1;
+    },
+    getState: () => state,
+  });
+  try {
+    const target = new URL("socket", server.url);
+    const first = new WebSocket(target, { origin: new URL(server.url).origin });
+    await closed(first);
+    assert.equal(releases, 1);
+    state = { ready: true };
+    const replacement = await openSocket(server.url);
+    server.disconnect();
+    await closed(replacement);
+    assert.equal(releases, 2);
   } finally {
     await server.close();
   }

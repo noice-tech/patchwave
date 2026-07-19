@@ -212,7 +212,8 @@ test("safety release cancels a staged reload and note-on before ordered note-off
   run.engine.accept = true;
   run.dispatcher.pump();
 
-  assert.deepEqual(run.engine.acceptedCalls, ["off"]);
+  assert.equal(run.engine.acceptedCalls[0], "off");
+  assert.match(run.engine.acceptedCalls[1] ?? "", /^update:/);
   assert.equal(run.engine.noteOns.length, 0);
   assert.equal(run.runtime.snapshot().patch.source.filter?.cutoffHz, 200);
   run.runtime.stop();
@@ -239,4 +240,138 @@ test("rejects time-varying topology, retains the last patch, and evaluates futur
   assert.deepEqual(frames, [0, 1, 2]);
   assert.equal(run.runtime.snapshot().error, null);
   run.runtime.stop();
+});
+
+test("program scalar preview persists across frames and cancel restores source evaluation", () => {
+  const run = harness(({ voice, frame }) => ({
+    source: {
+      frequencyHz: voice.frequencyHz,
+      oscillators: [{ waveform: "saw" as const }],
+      filter: { cutoffHz: 200 + frame, resonance: 0.2 },
+    },
+  }));
+  run.runtime.start();
+  assert.equal(
+    run.runtime.previewField("gesture", "a".repeat(64), ["source", "filter", "resonance"], 0.8),
+    true,
+  );
+  assert.equal(JSON.parse(run.engine.updates.at(-1)!).source.filter.resonance, 0.8);
+  run.setNow(34);
+  run.pulse();
+  assert.equal(JSON.parse(run.engine.updates.at(-1)!).source.filter.resonance, 0.8);
+  assert.equal(run.runtime.cancelPreview("gesture"), true);
+  assert.equal(JSON.parse(run.engine.updates.at(-1)!).source.filter.resonance, 0.2);
+  run.runtime.stop();
+});
+
+test("rapid previews coalesce outside the ordered voice queue", () => {
+  const run = harness(({ voice }) => ({
+    source: {
+      frequencyHz: voice.frequencyHz,
+      oscillators: [{ waveform: "saw" as const }],
+      filter: { cutoffHz: 500, resonance: 0 },
+    },
+  }));
+  run.runtime.start();
+  run.engine.accept = false;
+  for (let index = 0; index < 100; index += 1) {
+    assert.equal(
+      run.runtime.previewField("g", "a".repeat(64), ["source", "filter", "resonance"], index / 100),
+      true,
+    );
+  }
+  assert.equal(run.dispatcher.pendingVoiceOperations, 0);
+  run.engine.accept = true;
+  run.dispatcher.pump();
+  assert.equal(
+    JSON.parse(run.engine.acceptedCalls.at(-1)!.slice("update:".length)).source.filter.resonance,
+    0.99,
+  );
+  run.runtime.stop();
+});
+
+test("static base-frequency preview never overrides or persists a held keyboard note", () => {
+  const engine = new FakeEngine();
+  const dispatcher = new NativeDispatcher({
+    engine,
+    onError: (error) => assert.fail(String(error)),
+    onOverflow: assert.fail,
+  });
+  const runtime = new PatchRuntime({
+    initialModule: normalizePatchModuleExport({
+      source: { frequencyHz: 110, oscillators: [{ waveform: "sine" }] },
+    }),
+    initialVoice: { frequencyHz: 261.625565, gate: false },
+    dispatcher,
+    onState: () => undefined,
+    onProgramError: (message) => assert.fail(message),
+  });
+  const keyboard = new KeyboardState();
+  const action = keyboard.keyDown("KeyA");
+  assert.equal(runtime.handleKeyboard(action), true);
+  const played = keyboard.snapshot().voice.frequencyHz;
+  assert.equal(runtime.previewField("g", "a".repeat(64), ["source", "frequencyHz"], 220), true);
+  assert.equal(JSON.parse(engine.updates.at(-1)!).source.frequencyHz, played);
+  assert.equal(runtime.cancelPreview("g"), true);
+  assert.equal(JSON.parse(engine.updates.at(-1)!).source.frequencyHz, played);
+  runtime.releaseVoice();
+  dispatcher.stop();
+});
+
+test("stale preview target is dropped instead of rejecting a valid reload", async () => {
+  const run = harness(({ voice }) => ({
+    source: {
+      frequencyHz: voice.frequencyHz,
+      oscillators: [{ waveform: "saw" as const }],
+      filter: { cutoffHz: 500, resonance: 0.2 },
+    },
+  }));
+  assert.equal(
+    run.runtime.previewField("g", "a".repeat(64), ["source", "filter", "resonance"], 0.8),
+    true,
+  );
+  const accepted = await run.runtime.stageReload(
+    normalizePatchModuleExport(({ voice }: PatchProgramContext) => ({
+      source: { frequencyHz: voice.frequencyHz, oscillators: [{ waveform: "sine" as const }] },
+    })),
+  );
+  assert.equal(accepted, true);
+  assert.equal(run.runtime.snapshot().patch.source.filter, null);
+  run.runtime.stop();
+});
+
+test("stop cancels a pending note-on so pumping cannot reopen the gate", () => {
+  const run = harness(({ voice }) => patch(voice.frequencyHz));
+  run.engine.accept = false;
+  const keyboard = new KeyboardState();
+  assert.equal(run.runtime.handleKeyboard(keyboard.keyDown("KeyA")), true);
+  run.runtime.stop();
+  run.engine.accept = true;
+  run.dispatcher.pump();
+  assert.equal(
+    run.engine.acceptedCalls.some((call) => call.startsWith("on:")),
+    false,
+  );
+  run.dispatcher.stop();
+});
+
+test("safety release orders note-off before restoring source parameters", () => {
+  const run = harness(({ voice }) => ({
+    source: {
+      frequencyHz: voice.frequencyHz,
+      oscillators: [{ waveform: "saw" as const }],
+      filter: { cutoffHz: 500, resonance: 0.2 },
+    },
+  }));
+  assert.equal(
+    run.runtime.previewField("g", "a".repeat(64), ["source", "filter", "resonance"], 0.8),
+    true,
+  );
+  run.engine.acceptedCalls = [];
+  run.runtime.releaseVoice();
+  assert.equal(run.engine.acceptedCalls[0], "off");
+  const restored = JSON.parse(run.engine.acceptedCalls[1].slice("update:".length));
+  assert.equal(restored.source.filter.resonance, 0.2);
+  run.runtime.stop();
+  run.dispatcher.stop();
 });

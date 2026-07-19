@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { validatePatch } from "@patchwave/schema";
 import {
   runCli,
@@ -80,6 +80,7 @@ class FakeStudio implements StudioServer {
   publish(state: unknown): void {
     this.states.push(state);
   }
+  send(): void {}
   disconnect(): void {
     this.disconnected = true;
   }
@@ -108,11 +109,11 @@ function logger(): CliLogger & { logs: string[]; errors: string[] } {
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+  const deadline = performance.now() + 1_000;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("timed out waiting for fake CLI state");
+    await new Promise((resolve) => setTimeout(resolve, 2));
   }
-  throw new Error("timed out waiting for fake CLI startup");
 }
 
 function startHarness(
@@ -158,8 +159,16 @@ function startHarness(
   };
 }
 
-test("browser input drives ordered notes and normal cleanup without a TTY", async () => {
+function cleanUpHarness(context: TestContext, harness: ReturnType<typeof startHarness>): void {
+  context.after(async () => {
+    harness.signals.emit("SIGTERM");
+    await harness.promise;
+  });
+}
+
+test("browser input drives ordered notes and normal cleanup without a TTY", async (context) => {
   const harness = startHarness();
+  cleanUpHarness(context, harness);
   await waitUntil(() => harness.studioOptions !== undefined);
   harness.studioOptions!.onInput({ type: "keyDown", code: "KeyA" });
   harness.studioOptions!.onInput({ type: "keyDown", code: "KeyD" });
@@ -181,8 +190,9 @@ test("browser input drives ordered notes and normal cleanup without a TTY", asyn
   assert.match(harness.output.logs.join("\n"), /Studio: http:\/\/127\.0\.0\.1/);
 });
 
-test("SIGINT releases a held key before stopping audio", async () => {
+test("SIGINT releases a held key before stopping audio", async (context) => {
   const harness = startHarness();
+  cleanUpHarness(context, harness);
   await waitUntil(() => harness.studioOptions !== undefined);
   harness.studioOptions!.onInput({ type: "keyDown", code: "KeyA" });
   harness.signals.emit("SIGINT");
@@ -192,10 +202,11 @@ test("SIGINT releases a held key before stopping audio", async () => {
   assert.equal(harness.watcher.closed, true);
 });
 
-test("controller close cancels a backpressured reload and staged note before safety off", async () => {
+test("controller close cancels a backpressured reload and staged note before safety off", async (context) => {
   const engine = new FakeEngine();
   let loads = 0;
   const harness = startHarness(engine, async () => patchModule(++loads === 1 ? 110 : 220));
+  cleanUpHarness(context, harness);
   await waitUntil(() => harness.studioOptions !== undefined);
   engine.accept = false;
   harness.watcher.emit("change");
@@ -208,6 +219,8 @@ test("controller close cancels a backpressured reload and staged note before saf
   harness.studioOptions!.onControllerClosed();
   engine.accept = true;
   await waitUntil(() => engine.accepted.includes("off"));
+  harness.signals.emit("SIGTERM");
+  assert.equal(await harness.promise, 0);
 
   assert.equal(engine.noteOns.length, 0);
   assert.equal(
@@ -218,16 +231,21 @@ test("controller close cancels a backpressured reload and staged note before saf
     ),
     false,
   );
-  assert.equal(engine.accepted.at(-1), "off");
-
-  harness.signals.emit("SIGTERM");
-  assert.equal(await harness.promise, 0);
+  const offIndex = engine.accepted.indexOf("off");
+  const restoredIndex = engine.accepted.findIndex(
+    (call, index) =>
+      index > offIndex &&
+      call.startsWith("update:") &&
+      JSON.parse(call.slice("update:".length)).source.frequencyHz === 110,
+  );
+  assert.ok(offIndex >= 0 && restoredIndex > offIndex);
 });
 
-test("runtime-error polling reports failure and shuts down", async () => {
+test("runtime-error polling reports failure and shuts down", async (context) => {
   const engine = new FakeEngine();
   engine.runtimeError = true;
   const harness = startHarness(engine);
+  cleanUpHarness(context, harness);
   const code = await harness.promise;
   assert.equal(code, 1);
   assert.equal(engine.stops, 1);
