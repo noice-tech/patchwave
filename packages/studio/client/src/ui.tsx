@@ -5,7 +5,7 @@ export function cx(...classes: Array<string | false | null | undefined>): string
 }
 
 const buttonBaseClass =
-  "cursor-pointer border border-studio-border-control bg-studio-control text-studio-text-control enabled:hover:border-studio-accent enabled:hover:bg-studio-control-hover disabled:cursor-not-allowed disabled:opacity-35";
+  "cursor-pointer border border-studio-border-control bg-studio-control text-studio-text-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-studio-accent-strong enabled:hover:border-studio-accent enabled:hover:bg-studio-control-hover disabled:cursor-not-allowed disabled:border-studio-border disabled:text-studio-text-subtle disabled:opacity-50";
 
 const buttonSizeClasses = {
   default: "rounded-studio-control px-2.5 py-1.75",
@@ -17,8 +17,19 @@ type StudioButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   size?: keyof typeof buttonSizeClasses;
 };
 
-export function StudioButton({ className, size = "default", ...props }: StudioButtonProps) {
-  return <button className={cx(buttonBaseClass, buttonSizeClasses[size], className)} {...props} />;
+export function StudioButton({
+  className,
+  size = "default",
+  type = "button",
+  ...props
+}: StudioButtonProps) {
+  return (
+    <button
+      type={type}
+      className={cx(buttonBaseClass, buttonSizeClasses[size], className)}
+      {...props}
+    />
+  );
 }
 
 export const eyebrowClass =

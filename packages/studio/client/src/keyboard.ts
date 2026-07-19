@@ -1,21 +1,45 @@
-export function isEditingTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLSelectElement ||
-    target instanceof HTMLButtonElement ||
-    target instanceof HTMLTextAreaElement
-  );
-}
+export type PerformanceKeyEvent = Pick<
+  KeyboardEvent,
+  "altKey" | "code" | "ctrlKey" | "metaKey" | "repeat" | "shiftKey"
+>;
 
-export function shouldHandlePerformanceKey(
-  event: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "target">,
-  mapped: ReadonlySet<string>,
-): boolean {
-  return (
-    mapped.has(event.code) &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey &&
-    !isEditingTarget(event.target)
-  );
+export type PerformanceKeyDownResult = Readonly<{
+  captured: boolean;
+  send: boolean;
+}>;
+
+export class PerformanceKeyCapture {
+  #owned = new Set<string>();
+
+  keyDown(
+    event: PerformanceKeyEvent,
+    mapped: ReadonlySet<string>,
+    connected: boolean,
+  ): PerformanceKeyDownResult {
+    if (this.#owned.has(event.code)) return { captured: true, send: false };
+    if (
+      event.repeat ||
+      !connected ||
+      !mapped.has(event.code) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    ) {
+      return { captured: false, send: false };
+    }
+    this.#owned.add(event.code);
+    return { captured: true, send: true };
+  }
+
+  keyUp(code: string): boolean {
+    return this.#owned.delete(code);
+  }
+
+  clear(): void {
+    this.#owned.clear();
+  }
+
+  owns(code: string): boolean {
+    return this.#owned.has(code);
+  }
 }

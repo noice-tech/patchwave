@@ -4,7 +4,8 @@ import test from "node:test";
 
 test("React Studio preserves keyboard safety and gesture-end source commits", async () => {
   const source = await readFile(new URL("../client/src/main.tsx", import.meta.url), "utf8");
-  assert.match(source, /shouldHandlePerformanceKey/);
+  assert.match(source, /PerformanceKeyCapture/);
+  assert.match(source, /addEventListener\("keydown", down, true\)/);
   assert.match(source, /type: "keyUp"/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /pagehide/);
