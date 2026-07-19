@@ -35,6 +35,9 @@ importers:
       chokidar:
         specifier: 5.0.0
         version: 5.0.0
+      oxfmt:
+        specifier: 0.59.0
+        version: 0.59.0
       tsx:
         specifier: 4.23.1
         version: 4.23.1

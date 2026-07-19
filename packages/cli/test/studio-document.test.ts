@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { validatePatch } from "@patchwave/schema";
 import { StudioDocumentController } from "../src/studio-document.js";
+import { formatSource } from "../src/source-format.js";
 
 const text = `export default {source: {frequencyHz: 110, gainDb: -12, oscillators: [{waveform: "saw"}]}} satisfies Patch;\n`;
 const canonical = validatePatch({
@@ -82,7 +83,9 @@ test("preview is disk-free and a commit performs one revisioned source transacti
     operation: { type: "setField", path: ["source", "gainDb"], value: -18 },
   });
   assert.equal(commit.status, "committed");
-  assert.match(await readFile(path, "utf8"), /gainDb: -18/);
+  const written = await readFile(path, "utf8");
+  assert.match(written, /gainDb: -18/);
+  assert.equal(written, await formatSource(path, written));
   assert.equal(controller.snapshot().canUndo, true);
   await controller.refreshAfterReload(true, controller.snapshot().revision);
   await controller.refreshAfterReload(true, controller.snapshot().revision);

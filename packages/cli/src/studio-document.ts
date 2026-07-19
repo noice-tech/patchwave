@@ -17,6 +17,7 @@ import {
   sourceRevision,
   SourceConflictError,
 } from "./source-file.js";
+import { formatSource } from "./source-format.js";
 import { StudioHistory } from "./studio-history.js";
 
 export type StudioDocumentControllerOptions = {
@@ -292,6 +293,8 @@ export class StudioDocumentController {
         this.#fileLabel,
         input.operation,
       );
+      output = await formatSource(this.#path, output);
+      parseSource(output);
     } catch (error) {
       if (errorMessage(error) !== "Edit did not change the source file") throw error;
       this.#cancelPreview(input.gestureId ?? undefined);
