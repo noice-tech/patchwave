@@ -4,7 +4,8 @@ export declare class AudioEngine {
   constructor()
   start(): void
   stop(): void
-  setGate(enabled: boolean): void
-  applyPatch(serializedPatch: string): void
+  tryApplyPatch(serializedPatch: string): boolean
+  tryApplyPatchAndNoteOn(serializedPatch: string): boolean
+  tryNoteOff(): boolean
   takeRuntimeError(): boolean
 }

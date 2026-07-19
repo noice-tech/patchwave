@@ -142,7 +142,21 @@ export type Patch = {
   effects?: Effect[];
 };
 
-/** Fully explicit transport representation produced by validatePatch. */
+export type PatchProgramVoice = Readonly<{
+  frequencyHz: number;
+  gate: boolean;
+}>;
+
+export type PatchProgramContext = Readonly<{
+  frame: number;
+  fps: 60;
+  timeSeconds: number;
+  voice: PatchProgramVoice;
+}>;
+
+export type PatchProgram = (context: PatchProgramContext) => Patch;
+
+/** Fully explicit canonical patch produced by validatePatch for internal use. */
 export type CanonicalPatch = {
   source: {
     frequencyHz: number;

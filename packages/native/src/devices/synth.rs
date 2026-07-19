@@ -351,6 +351,12 @@ impl PreparedSynth {
         }
     }
 
+    pub(crate) fn retrigger(&mut self) {
+        self.gate = true;
+        self.amp.gate(true);
+        self.filter.set_gate(true);
+    }
+
     pub(crate) fn update(&mut self, parameters: SynthParameters) {
         for index in 0..4 {
             self.oscillators[index].update(parameters.oscillators[index], self.sample_rate);
@@ -465,6 +471,34 @@ mod tests {
         assert!(bypass_energy > 0.001);
         assert!(filtered_energy > 1e-9);
         assert!(filtered_energy < bypass_energy * 0.1);
+    }
+
+    #[test]
+    fn retrigger_restarts_envelope_and_lfo_without_resetting_oscillator_phase() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/patches/valid/wobble.json"
+        );
+        let mut synth = synth(path, 4_000.0);
+        synth.set_gate(true);
+        for _ in 0..137 {
+            synth.process();
+        }
+        let oscillator_phase = synth.oscillators[0].phase;
+        assert_eq!(
+            synth.amp.stage(),
+            crate::dsp::envelope::EnvelopeStage::Decay
+        );
+        assert_ne!(synth.filter.lfo.phase, 0.0);
+
+        synth.retrigger();
+
+        assert_eq!(synth.oscillators[0].phase, oscillator_phase);
+        assert_eq!(synth.filter.lfo.phase, 0.0);
+        assert_eq!(
+            synth.amp.stage(),
+            crate::dsp::envelope::EnvelopeStage::Attack
+        );
     }
 
     #[test]

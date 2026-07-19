@@ -40,7 +40,6 @@ pub(crate) fn unpack_structural(value: u64) -> (StructuralTag, u64) {
 }
 
 pub(crate) struct RuntimeStatus {
-    pub(crate) gate: AtomicBool,
     pub(crate) structural: AtomicU64,
     pub(crate) applied_generation: AtomicU64,
     pub(crate) cpal_error: AtomicBool,
@@ -50,7 +49,6 @@ pub(crate) struct RuntimeStatus {
 impl RuntimeStatus {
     pub(crate) fn new() -> Self {
         Self {
-            gate: AtomicBool::new(false),
             structural: AtomicU64::new(pack_structural(StructuralTag::Idle, 0)),
             applied_generation: AtomicU64::new(0),
             cpal_error: AtomicBool::new(false),
@@ -75,7 +73,11 @@ impl RuntimeStatus {
 // cannot deallocate on the callback thread.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
-    Parameter(ParameterSnapshot),
+    Parameter {
+        snapshot: ParameterSnapshot,
+        retrigger: bool,
+    },
+    NoteOff,
     Replace {
         generation: u64,
         chain: Box<PreparedChain>,
@@ -109,7 +111,7 @@ pub(crate) struct RealtimeState {
     commands: Consumer<Command>,
     retirements: Producer<RetiredChain>,
     fade: Fade,
-    sampled_gate: bool,
+    current_gate: bool,
     sample_rate: f32,
 }
 
@@ -125,7 +127,7 @@ impl RealtimeState {
 
         for _ in 0..MAX_COMMANDS_PER_CALLBACK {
             let command_kind = match self.commands.peek() {
-                Ok(Command::Parameter(_)) => 0_u8,
+                Ok(Command::Parameter { .. }) => 0_u8,
                 Ok(Command::Replace { generation, .. }) => {
                     if !matches!(self.fade, Fade::Stable)
                         || self.pending_incoming.is_some()
@@ -140,15 +142,23 @@ impl RealtimeState {
                     }
                     1
                 }
+                Ok(Command::NoteOff) => 2,
                 Err(_) => break,
             };
 
             match self.commands.pop() {
-                Ok(Command::Parameter(snapshot)) if command_kind == 0 => {
+                Ok(Command::Parameter {
+                    snapshot,
+                    retrigger,
+                }) if command_kind == 0 => {
                     let generation = snapshot.generation;
                     if self.active.apply(&snapshot).is_err() {
                         status.enter_fatal(generation);
                         return;
+                    }
+                    if retrigger {
+                        self.current_gate = true;
+                        self.active.retrigger();
                     }
                     status
                         .applied_generation
@@ -173,14 +183,22 @@ impl RealtimeState {
                     };
                     break;
                 }
+                Ok(Command::NoteOff) if command_kind == 2 => {
+                    self.current_gate = false;
+                    self.active.set_gate(false);
+                }
                 Ok(Command::Replace { chain, generation }) => {
                     // A queue value changed between peek/pop, which the SPSC contract forbids.
                     self.retain_fatal_incoming(generation, chain);
                     status.enter_fatal(generation);
                     return;
                 }
-                Ok(Command::Parameter(snapshot)) => {
+                Ok(Command::Parameter { snapshot, .. }) => {
                     status.enter_fatal(snapshot.generation);
+                    return;
+                }
+                Ok(Command::NoteOff) => {
+                    status.enter_fatal(status.applied_generation.load(Ordering::Acquire));
                     return;
                 }
                 Err(_) => {
@@ -188,12 +206,6 @@ impl RealtimeState {
                     return;
                 }
             }
-        }
-
-        let gate = status.gate.load(Ordering::Relaxed);
-        if gate != self.sampled_gate {
-            self.sampled_gate = gate;
-            self.active.set_gate(gate);
         }
     }
 
@@ -288,7 +300,7 @@ impl RealtimeState {
             status.enter_fatal(generation);
             return;
         };
-        pending.chain.set_gate(self.sampled_gate);
+        pending.chain.set_gate(self.current_gate);
         let old = std::mem::replace(&mut self.active, pending.chain);
         status
             .applied_generation
@@ -376,7 +388,7 @@ pub(crate) fn create_transport(active: Box<PreparedChain>, sample_rate: f32) -> 
             commands,
             retirements,
             fade: Fade::Stable,
-            sampled_gate: false,
+            current_gate: false,
             sample_rate,
         }))),
         data_lease_issued: false,
@@ -510,16 +522,55 @@ mod tests {
                 .unwrap();
             transport
                 .command_producer
-                .push(Command::Parameter(snapshot))
+                .push(Command::Parameter {
+                    snapshot,
+                    retrigger: false,
+                })
                 .unwrap();
         }
         let rejected = spec(300.0).parameter_snapshot(99).unwrap();
         assert!(transport
             .command_producer
-            .push(Command::Parameter(rejected))
+            .push(Command::Parameter {
+                snapshot: rejected,
+                retrigger: false,
+            })
             .is_err());
         driver.callback(1);
         assert_eq!(status.applied_generation.load(Ordering::Acquire), 8);
+    }
+
+    #[test]
+    fn note_commands_are_ordered_and_fallback_updates_preserve_gate() {
+        let (mut transport, status, mut driver) = setup(1_000.0);
+        transport
+            .command_producer
+            .push(Command::Parameter {
+                snapshot: spec(200.0).parameter_snapshot(1).unwrap(),
+                retrigger: true,
+            })
+            .unwrap();
+        driver.callback(1);
+        let state = unsafe { &*transport.core.0.get() };
+        assert!(state.current_gate);
+        assert_eq!(status.applied_generation.load(Ordering::Acquire), 1);
+
+        transport
+            .command_producer
+            .push(Command::Parameter {
+                snapshot: spec(300.0).parameter_snapshot(2).unwrap(),
+                retrigger: false,
+            })
+            .unwrap();
+        driver.callback(1);
+        let state = unsafe { &*transport.core.0.get() };
+        assert!(state.current_gate);
+        assert_eq!(status.applied_generation.load(Ordering::Acquire), 2);
+
+        transport.command_producer.push(Command::NoteOff).unwrap();
+        driver.callback(1);
+        let state = unsafe { &*transport.core.0.get() };
+        assert!(!state.current_gate);
     }
 
     #[test]
@@ -549,13 +600,54 @@ mod tests {
     }
 
     #[test]
+    fn structural_replacement_inherits_the_current_gate() {
+        let (mut transport, status, mut driver) = setup(1_000.0);
+        transport
+            .command_producer
+            .push(Command::Parameter {
+                snapshot: spec(100.0).parameter_snapshot(1).unwrap(),
+                retrigger: true,
+            })
+            .unwrap();
+        driver.callback(1);
+
+        status.structural.store(
+            pack_structural(StructuralTag::Reserved, 2),
+            Ordering::Release,
+        );
+        let mut replacement = spec(200.0);
+        replacement
+            .source
+            .oscillators
+            .push(replacement.source.oscillators[0]);
+        transport
+            .command_producer
+            .push(Command::Replace {
+                generation: 2,
+                chain: Box::new(replacement.prepare_chain(1_000.0).unwrap()),
+            })
+            .unwrap();
+        driver.callback(5);
+        let state = unsafe { &*transport.core.0.get() };
+        assert!(state.current_gate);
+        assert_eq!(status.applied_generation.load(Ordering::Acquire), 2);
+        assert!(driver
+            .callback(8)
+            .iter()
+            .any(|frame| frame.left != 0.0 || frame.right != 0.0));
+    }
+
+    #[test]
     fn mismatch_enters_persistent_fatal_silence() {
         let (mut transport, status, mut driver) = setup(1_000.0);
         let mut snapshot = spec(200.0).parameter_snapshot(1).unwrap();
         snapshot.signature.effect_count = 7;
         transport
             .command_producer
-            .push(Command::Parameter(snapshot))
+            .push(Command::Parameter {
+                snapshot,
+                retrigger: false,
+            })
             .unwrap();
         let output = driver.callback(8);
         assert!(status.fatal.load(Ordering::Acquire));
@@ -585,9 +677,10 @@ mod tests {
         let (mut transport, status, driver) = setup(1_000.0);
         transport
             .command_producer
-            .push(Command::Parameter(
-                spec(250.0).parameter_snapshot(1).unwrap(),
-            ))
+            .push(Command::Parameter {
+                snapshot: spec(250.0).parameter_snapshot(1).unwrap(),
+                retrigger: false,
+            })
             .unwrap_or_else(|_| panic!("command push"));
         assert_eq!(status.applied_generation.load(Ordering::Acquire), 0);
         let released = Arc::clone(&driver.lease.released);
@@ -621,7 +714,7 @@ mod tests {
             commands,
             retirements,
             fade: Fade::Stable,
-            sampled_gate: false,
+            current_gate: false,
             sample_rate: 1_000.0,
         })));
         let status = Arc::new(RuntimeStatus::new());
@@ -678,7 +771,7 @@ mod tests {
             commands,
             retirements,
             fade: Fade::Stable,
-            sampled_gate: false,
+            current_gate: false,
             sample_rate: 1_000.0,
         };
         let status = RuntimeStatus::new();
@@ -919,10 +1012,10 @@ mod tests {
         let spec = maximum_patch();
         for sample_rate in [48_000.0f32, 96_000.0] {
             for frames in [32usize, 64, 128] {
-                let active = Box::new(spec.prepare_chain(sample_rate).unwrap());
-                let mut transport = create_transport(active, sample_rate);
+                let mut active = spec.prepare_chain(sample_rate).unwrap();
+                active.set_gate(true);
+                let mut transport = create_transport(Box::new(active), sample_rate);
                 let status = Arc::new(RuntimeStatus::new());
-                status.gate.store(true, Ordering::Relaxed);
                 let mut lease = transport
                     .issue_data_lease(Arc::clone(&status), Arc::new(AtomicBool::new(false)))
                     .unwrap();
@@ -949,9 +1042,10 @@ mod tests {
                         let generation = 1 + (iteration * 8 + offset) as u64;
                         transport
                             .command_producer
-                            .push(Command::Parameter(
-                                spec.parameter_snapshot(generation).unwrap(),
-                            ))
+                            .push(Command::Parameter {
+                                snapshot: spec.parameter_snapshot(generation).unwrap(),
+                                retrigger: false,
+                            })
                             .unwrap_or_else(|_| panic!("benchmark queue"));
                     }
                     updates.push(measure_callback(&mut callback));

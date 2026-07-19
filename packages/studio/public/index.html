@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Patchwave Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PATCHWAVE</p>
+          <h1>Studio</h1>
+        </div>
+        <div class="connection">
+          <span id="connection-dot"></span><span id="connection">Connecting</span>
+        </div>
+      </header>
+
+      <section class="hero panel">
+        <div>
+          <p class="label">Keyboard / controller input</p>
+          <div class="note-row">
+            <strong id="note">—</strong><span id="frequency">261.63 Hz</span>
+          </div>
+        </div>
+        <dl class="metrics">
+          <div>
+            <dt>Mode</dt>
+            <dd id="mode">static</dd>
+          </div>
+          <div>
+            <dt>Gate</dt>
+            <dd id="gate">closed</dd>
+          </div>
+          <div>
+            <dt>Octave</dt>
+            <dd id="octave">C3</dd>
+          </div>
+          <div>
+            <dt>Time</dt>
+            <dd id="time">0.00 s</dd>
+          </div>
+          <div>
+            <dt>Frame</dt>
+            <dd id="frame">0</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="section">
+        <div class="section-title">
+          <h2>Signal chain</h2>
+          <span id="summary"></span>
+        </div>
+        <div id="chain" class="chain"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-title">
+          <h2>Computer keyboard</h2>
+          <span>Z / X changes octave</span>
+        </div>
+        <div id="keyboard" class="keyboard" aria-label="Playable computer keyboard"></div>
+      </section>
+
+      <section id="status-panel" class="status panel">
+        <span class="status-light"></span>
+        <div>
+          <p class="label">Runtime</p>
+          <p id="status" aria-live="polite" aria-atomic="true">Waiting for the audio session…</p>
+        </div>
+      </section>
+      <p class="hint">
+        Keep this page focused to play. Leaving or closing it safely releases the voice.
+      </p>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

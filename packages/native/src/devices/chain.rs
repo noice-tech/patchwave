@@ -107,6 +107,11 @@ impl PreparedChain {
         self.source.set_gate(gate);
     }
 
+    pub(crate) fn retrigger(&mut self) {
+        self.gate = true;
+        self.source.retrigger();
+    }
+
     pub(crate) fn process(&mut self) -> StereoFrame {
         let mut signal = self.source.process();
         for effect in &mut self.effects {

@@ -1,6 +1,6 @@
 # Patchwave
 
-Patchwave is a small, code-first monophonic synthesizer. Write a TypeScript object, save it, and hear every valid change immediately through a realtime Rust DSP engine.
+Patchwave is a small, code-first monophonic synthesizer. Write a TypeScript patch object or a frame-driven patch program, save it, and hear every valid change immediately through a realtime Rust DSP engine.
 
 ```text
 oscillator mix
@@ -34,7 +34,7 @@ pnpm build
 pnpm patchwave ./example/sound.ts
 ```
 
-Startup is silent. Press **Space** to open or close the gate, `q` to quit, or Ctrl+C to exit. Keep the process running, edit the patch, and save. Invalid saves are rejected while the previous patch keeps playing.
+Patchwave prints and opens a capability-scoped Studio URL. Keep the browser focused and play with the Ableton-style computer keyboard layout below. Press Ctrl+C in the terminal to exit. Keep the process running, edit the patch, and save; invalid saves are rejected while the previous patch keeps playing.
 
 ## Smallest patch
 
@@ -50,6 +50,49 @@ export default {
 ```
 
 Patchwave supplies safe defaults for omitted details and normalizes the author object before it reaches Rust.
+
+## Frame-driven patch programs
+
+A default export may instead be a synchronous function from an exact 60 fps logical frame and current monophonic voice to the same plain patch object:
+
+```ts
+import type { PatchProgram } from "@patchwave/schema";
+
+export default (({ timeSeconds, voice }) => ({
+  source: {
+    frequencyHz: voice.frequencyHz,
+    oscillators: [{ waveform: "saw" }],
+    filter: {
+      cutoffHz: 1_200 + Math.sin(timeSeconds * Math.PI * 0.5) * 900,
+    },
+  },
+})) satisfies PatchProgram;
+```
+
+The readonly context contains `frame`, `fps: 60`, `timeSeconds: frame / 60`, and `voice: { frequencyHz, gate }`. Late control frames are skipped rather than replayed in a burst. The clock begins at frame zero, continues across hot reloads, and resets only when Patchwave restarts.
+
+The first valid result establishes oscillator count and ordered effect kinds. Later frames may animate nonstructural values but cannot animate oscillator count, effect count, or effect kinds. A newly hot-reloaded module may establish a different structure. A bad frame keeps the last valid sound and does not stop future frames.
+
+Patch programs are control-rate automation: JavaScript never runs in the audio callback, and Rust smooths accepted parameter images. The nested cutoff LFO remains the sample-accurate choice for fast filter modulation.
+
+## Studio
+
+Studio binds only to loopback with a random per-process capability URL. It visualizes the current signal chain, canonical values, program time, voice, and runtime status. It does not read or rewrite source files and exposes no patch editor or remote hosting surface.
+
+Use physical computer-key positions:
+
+```text
+      W E     T Y U
+      ♯ ♯     ♯ ♯ ♯
+    A S D F G H J K
+    C D E F G A B C
+
+    Z: octave down    X: octave up
+```
+
+`A` begins at Ableton's displayed `C3`. New notes retrigger the envelope and filter LFO. Patchwave uses last-pressed priority: releasing the active key falls back to the most recently held key without retriggering, and releasing the final key starts the amplitude release. Leaving, hiding, or disconnecting the studio safely releases all notes. Velocity is not yet modeled.
+
+Static patches become playable through a transient runtime frequency copy; the TypeScript file is never changed. Patch programs control their returned pitch directly, so use `voice.frequencyHz` when keyboard pitch should drive the source.
 
 ## Source
 
@@ -169,13 +212,14 @@ Waveform, filter, LFO, tuning, gain, envelope, and same-position effect paramete
 | [`sound.ts`](./example/sound.ts)               | Minimal beginner patch                                |
 | [`classic-bass.ts`](./example/classic-bass.ts) | Detuned saws, sine foundation, filter, and saturation |
 | [`dubstep-bass.ts`](./example/dubstep-bass.ts) | Gate-reset cutoff wobble and an ordered effect chain  |
+| [`program.ts`](./example/program.ts)           | Keyboard pitch and frame-driven filter automation     |
 
 ## Development
 
 ```bash
 pnpm build              # schema, TypeScript, native addon, and CLI
 pnpm typecheck          # workspace TypeScript checking
-pnpm test               # schema, CLI, native, and shared-fixture tests
+pnpm test               # schema, studio, CLI, native, and shared-fixture tests
 pnpm check              # typecheck, formatting check, and Clippy
 pnpm validate           # complete standard validation
 pnpm bench:callback     # release callback work-budget benchmark
@@ -186,7 +230,7 @@ The callback does not allocate, lock, parse, log, block, invoke JavaScript/N-API
 
 ## Experimental scope
 
-Patchwave is an experimental, macOS-first project rather than a published package or finished instrument. It is monophonic, uses the default output device, and currently has no MIDI input, polyphony, plugin format, sample playback, arbitrary routing, or device-selection UI.
+Patchwave is an experimental, macOS-first project rather than a published package or finished instrument. It is monophonic, uses the default output device, and currently has no hardware MIDI input, velocity, sustain, transport, named controls, polyphony, plugin format, sample playback, arbitrary routing, or device-selection UI.
 
 ## License
 

@@ -9,29 +9,8 @@ import {
   type SignalSource,
   type WatcherLike,
 } from "../src/cli.js";
-import type { KeyboardInput } from "../src/keyboard.js";
-import type { LoadedPatch } from "../src/load-patch.js";
-
-class FakeInput extends EventEmitter {
-  isTTY = true;
-  isRaw = false;
-  rawChanges: boolean[] = [];
-  resumed = false;
-
-  setRawMode(enabled: boolean): this {
-    this.isRaw = enabled;
-    this.rawChanges.push(enabled);
-    return this;
-  }
-  resume(): this {
-    this.resumed = true;
-    return this;
-  }
-  pause(): this {
-    this.resumed = false;
-    return this;
-  }
-}
+import type { PatchModule } from "../src/load-patch.js";
+import type { StudioServer, StudioServerOptions } from "@patchwave/studio";
 
 class FakeWatcher extends EventEmitter implements WatcherLike {
   closed = false;
@@ -51,23 +30,40 @@ class FakeWatcher extends EventEmitter implements WatcherLike {
 }
 
 class FakeEngine implements CliAudioEngine {
-  applied: string[] = [];
-  gates: boolean[] = [];
+  updates: string[] = [];
+  noteOns: string[] = [];
+  noteOffs = 0;
   starts = 0;
   stops = 0;
   runtimeError = false;
+  accept = true;
+  accepted: string[] = [];
+  events: string[] = [];
 
-  applyPatch(serialized: string): void {
-    this.applied.push(serialized);
+  tryApplyPatch(serialized: string): boolean {
+    this.updates.push(serialized);
+    if (this.accept) this.accepted.push(`update:${serialized}`);
+    return this.accept;
   }
-  setGate(enabled: boolean): void {
-    this.gates.push(enabled);
+  tryApplyPatchAndNoteOn(serialized: string): boolean {
+    this.noteOns.push(serialized);
+    if (this.accept) this.accepted.push(`on:${serialized}`);
+    return this.accept;
+  }
+  tryNoteOff(): boolean {
+    this.noteOffs += 1;
+    if (this.accept) {
+      this.accepted.push("off");
+      this.events.push("off");
+    }
+    return this.accept;
   }
   start(): void {
     this.starts += 1;
   }
   stop(): void {
     this.stops += 1;
+    this.events.push("stop");
   }
   takeRuntimeError(): boolean {
     const value = this.runtimeError;
@@ -76,21 +72,31 @@ class FakeEngine implements CliAudioEngine {
   }
 }
 
-function loaded(): LoadedPatch {
-  const patch = validatePatch({
-    source: { frequencyHz: 110, oscillators: [{ waveform: "sine" }] },
-  });
+class FakeStudio implements StudioServer {
+  url = "http://127.0.0.1:1234/session/test/";
+  states: unknown[] = [];
+  closed = false;
+  disconnected = false;
+  publish(state: unknown): void {
+    this.states.push(state);
+  }
+  disconnect(): void {
+    this.disconnected = true;
+  }
+  close(): Promise<void> {
+    this.closed = true;
+    return Promise.resolve();
+  }
+}
+
+function patchModule(frequencyHz = 110): PatchModule {
   return {
-    patch,
-    serialized: JSON.stringify(patch),
-    summary: "110 Hz; 1 oscillator; 0 effects",
+    kind: "static",
+    patch: validatePatch({ source: { frequencyHz, oscillators: [{ waveform: "sine" }] } }),
   };
 }
 
-function logger(): CliLogger & {
-  logs: string[];
-  errors: string[];
-} {
+function logger(): CliLogger & { logs: string[]; errors: string[] } {
   const logs: string[] = [];
   const errors: string[] = [];
   return {
@@ -109,59 +115,113 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   throw new Error("timed out waiting for fake CLI startup");
 }
 
-function startHarness(engine = new FakeEngine()) {
-  const input = new FakeInput();
+function startHarness(
+  engine = new FakeEngine(),
+  load: (path: string) => Promise<PatchModule> = async () => patchModule(),
+) {
   const watcher = new FakeWatcher();
   const signals = new EventEmitter();
   const output = logger();
-  const exitCodes: number[] = [];
+  const studio = new FakeStudio();
+  let studioOptions: StudioServerOptions | undefined;
+  const opened: string[] = [];
   const promise = runCli({
     args: ["sound.ts"],
     invocationDirectory: "/virtual",
-    input: input as KeyboardInput,
     createEngine: async () => engine,
-    load: async () => loaded(),
+    load,
     watch: () => {
       queueMicrotask(() => watcher.emit("ready"));
       return watcher;
     },
     isFile: async () => true,
+    startStudio: async (options) => {
+      studioOptions = options;
+      return studio;
+    },
+    openUrl: (url) => opened.push(url),
     signals: signals as SignalSource,
     logger: output,
-    setExitCode: (code) => exitCodes.push(code),
+    setExitCode: () => undefined,
   });
-  return { engine, input, watcher, signals, output, exitCodes, promise };
+  return {
+    engine,
+    watcher,
+    signals,
+    output,
+    studio,
+    opened,
+    promise,
+    get studioOptions() {
+      return studioOptions;
+    },
+  };
 }
 
-test("fake TTY drives one patch call, gate toggle, q, and cleanup", async () => {
+test("browser input drives ordered notes and normal cleanup without a TTY", async () => {
   const harness = startHarness();
-  await waitUntil(() => harness.input.listenerCount("data") > 0);
-  harness.input.emit("data", Buffer.from(" q"));
+  await waitUntil(() => harness.studioOptions !== undefined);
+  harness.studioOptions!.onInput({ type: "keyDown", code: "KeyA" });
+  harness.studioOptions!.onInput({ type: "keyDown", code: "KeyD" });
+  harness.studioOptions!.onInput({ type: "keyUp", code: "KeyD" });
+  harness.studioOptions!.onInput({ type: "keyUp", code: "KeyA" });
+  harness.studioOptions!.onInput({ type: "keyDown", code: "KeyF" });
+  harness.signals.emit("SIGTERM");
   const code = await harness.promise;
 
   assert.equal(code, 0);
-  assert.equal(harness.engine.applied.length, 1);
   assert.equal(harness.engine.starts, 1);
   assert.equal(harness.engine.stops, 1);
-  assert.deepEqual(harness.engine.gates, [false, true, false]);
-  assert.deepEqual(harness.input.rawChanges, [true, false]);
-  assert.equal(harness.input.resumed, false);
-  assert.equal(harness.watcher.closed, true);
-  assert.match(harness.output.logs.join("\n"), /Chain: 110 Hz; 1 oscillator; 0 effects/);
+  assert.equal(harness.engine.noteOns.length, 3);
+  assert.ok(harness.engine.updates.length >= 2);
+  assert.ok(harness.engine.noteOffs >= 1);
+  assert.ok(harness.engine.events.indexOf("off") < harness.engine.events.indexOf("stop"));
+  assert.equal(harness.studio.closed, true);
+  assert.deepEqual(harness.opened, [harness.studio.url]);
+  assert.match(harness.output.logs.join("\n"), /Studio: http:\/\/127\.0\.0\.1/);
 });
 
-test("raw Ctrl+C and SIGTERM both use the normal cleanup path", async () => {
-  const ctrl = startHarness();
-  await waitUntil(() => ctrl.input.listenerCount("data") > 0);
-  ctrl.input.emit("data", Buffer.from("\u0003"));
-  assert.equal(await ctrl.promise, 0);
-  assert.equal(ctrl.engine.stops, 1);
+test("SIGINT releases a held key before stopping audio", async () => {
+  const harness = startHarness();
+  await waitUntil(() => harness.studioOptions !== undefined);
+  harness.studioOptions!.onInput({ type: "keyDown", code: "KeyA" });
+  harness.signals.emit("SIGINT");
+  assert.equal(await harness.promise, 0);
+  assert.equal(harness.engine.stops, 1);
+  assert.ok(harness.engine.events.indexOf("off") < harness.engine.events.indexOf("stop"));
+  assert.equal(harness.watcher.closed, true);
+});
 
-  const term = startHarness();
-  await waitUntil(() => term.input.listenerCount("data") > 0);
-  term.signals.emit("SIGTERM");
-  assert.equal(await term.promise, 0);
-  assert.equal(term.engine.stops, 1);
+test("controller close cancels a backpressured reload and staged note before safety off", async () => {
+  const engine = new FakeEngine();
+  let loads = 0;
+  const harness = startHarness(engine, async () => patchModule(++loads === 1 ? 110 : 220));
+  await waitUntil(() => harness.studioOptions !== undefined);
+  engine.accept = false;
+  harness.watcher.emit("change");
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await waitUntil(() =>
+    engine.updates.some((serialized) => JSON.parse(serialized).source.frequencyHz === 220),
+  );
+
+  harness.studioOptions!.onInput({ type: "keyDown", code: "KeyA" });
+  harness.studioOptions!.onControllerClosed();
+  engine.accept = true;
+  await waitUntil(() => engine.accepted.includes("off"));
+
+  assert.equal(engine.noteOns.length, 0);
+  assert.equal(
+    engine.accepted.some(
+      (call) =>
+        call.startsWith("update:") &&
+        JSON.parse(call.slice("update:".length)).source.frequencyHz === 220,
+    ),
+    false,
+  );
+  assert.equal(engine.accepted.at(-1), "off");
+
+  harness.signals.emit("SIGTERM");
+  assert.equal(await harness.promise, 0);
 });
 
 test("runtime-error polling reports failure and shuts down", async () => {

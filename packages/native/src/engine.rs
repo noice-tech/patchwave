@@ -77,7 +77,7 @@ impl ControlState {
         Ok(())
     }
 
-    fn ensure_patch_available(&mut self) -> Result<()> {
+    fn ensure_healthy(&mut self) -> Result<()> {
         if self.closed {
             return Err(native_error("Audio engine is closed"));
         }
@@ -90,9 +90,6 @@ impl ControlState {
         let (tag, _) = self.status.structural();
         if tag == StructuralTag::Fatal || self.status.fatal.load(Ordering::Acquire) {
             return Err(native_error("Audio engine realtime state is fatal"));
-        }
-        if tag != StructuralTag::Idle {
-            return Err(native_error("A structural patch transition is busy"));
         }
         Ok(())
     }
@@ -113,23 +110,35 @@ impl ControlState {
         }
     }
 
-    fn enqueue_candidate(&mut self, candidate: PatchSpec) -> Result<()> {
-        self.ensure_patch_available()?;
-        if candidate == self.accepted {
-            return Ok(());
+    fn try_enqueue_candidate(&mut self, candidate: PatchSpec, retrigger: bool) -> Result<bool> {
+        self.ensure_healthy()?;
+        let (tag, _) = self.status.structural();
+        if tag != StructuralTag::Idle
+            || self.status.applied_generation.load(Ordering::Acquire) != self.accepted_generation
+        {
+            return Ok(false);
+        }
+        if candidate == self.accepted && !retrigger {
+            return Ok(true);
         }
 
         let generation = self.next_generation()?;
         let signature = candidate.structural_signature();
+        if retrigger && signature != self.signature {
+            return Err(native_error(
+                "A note-on patch must keep the accepted signal-chain structure",
+            ));
+        }
         if signature == self.signature {
             let snapshot = candidate
                 .parameter_snapshot(generation)
                 .map_err(|error| native_error(error.to_string()))?;
-            match self.command_producer.push(Command::Parameter(snapshot)) {
+            match self.command_producer.push(Command::Parameter {
+                snapshot,
+                retrigger,
+            }) {
                 Ok(()) => {}
-                Err(PushError::Full(_)) => {
-                    return Err(native_error("Realtime command queue is full"));
-                }
+                Err(PushError::Full(_)) => return Ok(false),
             }
         } else {
             let chain = Box::new(
@@ -139,10 +148,14 @@ impl ControlState {
             );
             let idle = pack_structural(StructuralTag::Idle, 0);
             let reserved = pack_structural(StructuralTag::Reserved, generation);
-            self.status
+            if self
+                .status
                 .structural
                 .compare_exchange(idle, reserved, Ordering::AcqRel, Ordering::Acquire)
-                .map_err(|_| native_error("A structural patch transition is busy"))?;
+                .is_err()
+            {
+                return Ok(false);
+            }
             match self
                 .command_producer
                 .push(Command::Replace { generation, chain })
@@ -151,7 +164,7 @@ impl ControlState {
                 Err(PushError::Full(command)) => {
                     self.status.structural.store(idle, Ordering::Release);
                     drop(command);
-                    return Err(native_error("Realtime command queue is full"));
+                    return Ok(false);
                 }
             }
         }
@@ -159,7 +172,15 @@ impl ControlState {
         self.accepted = candidate;
         self.signature = signature;
         self.accepted_generation = generation;
-        Ok(())
+        Ok(true)
+    }
+
+    fn try_note_off(&mut self) -> Result<bool> {
+        self.ensure_healthy()?;
+        match self.command_producer.push(Command::NoteOff) {
+            Ok(()) => Ok(true),
+            Err(PushError::Full(_)) => Ok(false),
+        }
     }
 }
 
@@ -275,21 +296,22 @@ impl AudioEngine {
     }
 
     #[napi]
-    pub fn set_gate(&self, enabled: bool) {
-        if let Some(status) = &self.status {
-            status.gate.store(enabled, Ordering::Relaxed);
-        }
+    pub fn try_apply_patch(&self, serialized_patch: String) -> Result<bool> {
+        self.try_apply(serialized_patch, false)
     }
 
     #[napi]
-    pub fn apply_patch(&self, serialized_patch: String) -> Result<()> {
-        let candidate = parse_patch(&serialized_patch)
-            .map_err(|error| native_error(format!("Invalid patch: {error}")))?;
+    pub fn try_apply_patch_and_note_on(&self, serialized_patch: String) -> Result<bool> {
+        self.try_apply(serialized_patch, true)
+    }
+
+    #[napi]
+    pub fn try_note_off(&self) -> Result<bool> {
         let mut control = self.control()?;
         control
             .as_mut()
             .ok_or_else(|| native_error("Audio engine is closed"))?
-            .enqueue_candidate(candidate)
+            .try_note_off()
     }
 
     #[napi]
@@ -308,6 +330,16 @@ impl AudioEngine {
 }
 
 impl AudioEngine {
+    fn try_apply(&self, serialized_patch: String, retrigger: bool) -> Result<bool> {
+        let candidate = parse_patch(&serialized_patch)
+            .map_err(|error| native_error(format!("Invalid patch: {error}")))?;
+        let mut control = self.control()?;
+        control
+            .as_mut()
+            .ok_or_else(|| native_error("Audio engine is closed"))?
+            .try_enqueue_candidate(candidate, retrigger)
+    }
+
     fn control(&self) -> Result<MutexGuard<'_, Option<ControlState>>> {
         self.control
             .lock()
@@ -454,25 +486,30 @@ mod tests {
     }
 
     #[test]
-    fn queue_full_does_not_commit_the_candidate_mirror() {
+    fn one_unacknowledged_parameter_image_applies_backpressure_without_committing() {
         let mut control = control();
-        for generation in 1..=8 {
-            let candidate = with_frequency(&control, 440.0 + generation as f32);
-            control.enqueue_candidate(candidate).unwrap();
-        }
-        assert_eq!(control.accepted_generation, 8);
-        assert_eq!(accepted_frequency(&control), 448.0);
-        let rejected = with_frequency(&control, 900.0);
-        assert!(control.enqueue_candidate(rejected).is_err());
-        assert_eq!(control.accepted_generation, 8);
-        assert_eq!(accepted_frequency(&control), 448.0);
+        let first = with_frequency(&control, 441.0);
+        assert!(control.try_enqueue_candidate(first, false).unwrap());
+        assert_eq!(control.accepted_generation, 1);
+        assert_eq!(accepted_frequency(&control), 441.0);
+
+        let pending = with_frequency(&control, 900.0);
+        assert!(!control.try_enqueue_candidate(pending, false).unwrap());
+        assert_eq!(control.accepted_generation, 1);
+        assert_eq!(accepted_frequency(&control), 441.0);
     }
 
     #[test]
-    fn identical_patch_is_a_noop_and_structural_credit_is_exclusive() {
+    fn identical_patch_is_a_noop_retrigger_is_not_and_structural_credit_is_exclusive() {
         let mut control = control();
-        control.enqueue_candidate(control.accepted.clone()).unwrap();
+        assert!(control
+            .try_enqueue_candidate(control.accepted.clone(), false)
+            .unwrap());
         assert_eq!(control.accepted_generation, 0);
+        assert!(control
+            .try_enqueue_candidate(control.accepted.clone(), true)
+            .unwrap());
+        assert_eq!(control.accepted_generation, 1);
 
         let mut structural = control.accepted.clone();
         structural.source.oscillators.push(OscillatorSpec {
@@ -482,10 +519,7 @@ mod tests {
             pulse_width: 0.5,
             level: 0.5,
         });
-        control.enqueue_candidate(structural).unwrap();
-        assert_eq!(control.status.structural().0, StructuralTag::Reserved);
-        let parameter = with_frequency(&control, 880.0);
-        assert!(control.enqueue_candidate(parameter).is_err());
+        assert!(!control.try_enqueue_candidate(structural, false).unwrap());
         assert_eq!(control.accepted_generation, 1);
     }
 
@@ -568,7 +602,7 @@ mod tests {
         let mut control = control();
         control.status.cpal_error.store(true, Ordering::Release);
         let candidate = with_frequency(&control, 880.0);
-        assert!(control.enqueue_candidate(candidate).is_err());
+        assert!(control.try_enqueue_candidate(candidate, false).is_err());
         assert_eq!(control.accepted_generation, 0);
         assert_eq!(accepted_frequency(&control), DEFAULT_FREQUENCY);
     }
