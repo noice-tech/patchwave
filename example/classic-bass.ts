@@ -20,11 +20,14 @@ export default {
       releaseSeconds: 0.18,
     },
   },
-  effects: [{ type: "saturator", driveDb: 24.6 }, {
-    type: "stereoDelay",
-    timeSeconds: 0.906,
-    feedback: 0.32,
-    damping: 0.16,
-    mix: 0.25,
-  }],
+  effects: [
+    { type: "saturator", driveDb: 24.6 },
+    {
+      type: "stereoDelay",
+      timeSeconds: 0.906,
+      feedback: 0.32,
+      damping: 0.16,
+      mix: 0.25,
+    },
+  ],
 } satisfies Patch;
