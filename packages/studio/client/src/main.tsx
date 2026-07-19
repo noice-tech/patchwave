@@ -7,11 +7,20 @@ import type {
   PatchFieldPath,
   PatchScalar,
   SourceBinding,
+  StudioDocumentPhase,
   StudioDocumentSnapshot,
   StudioEditResult,
   StudioServerMessage,
 } from "../../src/index.js";
 import { shouldHandlePerformanceKey } from "./keyboard.js";
+import {
+  cx,
+  eyebrowClass,
+  panelHelpClass,
+  sourceBadgeClass,
+  statusPillClass,
+  StudioButton,
+} from "./ui.js";
 import "./studio.css";
 
 type RuntimeState = any;
@@ -19,6 +28,49 @@ type Selection = {
   kind: "source" | "oscillator" | "filter" | "lfo" | "envelope" | "effect" | "safety";
   index?: number;
 };
+
+const phaseToneClasses: Record<StudioDocumentPhase, string> = {
+  ready: "text-studio-text-phase",
+  writing: "text-studio-text-phase",
+  previewing: "text-studio-warning",
+  "source-written": "text-studio-info",
+  reloading: "text-studio-info",
+  "audio-accepted": "text-studio-success",
+  conflict: "text-studio-danger",
+  error: "text-studio-danger",
+};
+
+const sourceBadgeToneClasses: Record<SourceBinding["sourceForm"]["kind"], string> = {
+  literal: "text-studio-text-panel",
+  computed: "text-studio-warning-muted",
+  default: "text-studio-info-muted",
+};
+
+const serialConnectorClass =
+  "after:absolute after:top-1/2 after:-right-2.75 after:h-px after:w-2.75 after:bg-studio-connector after:content-['']";
+
+const parameterClass = "block border-b border-studio-border-parameter py-3.75";
+const parameterLabelClass = "mb-2.25 flex items-center justify-between text-studio-copy font-bold";
+const nativeSelectClass =
+  "w-full appearance-auto [background-color:revert] [border-radius:revert] [border:revert] [color:revert] [padding:revert]";
+const noteClass =
+  "mt-3.5 rounded-studio-note border border-studio-note-border bg-studio-note-bg p-2.5 text-studio-copy leading-[1.5] text-studio-note";
+
+const keyboardKeys = [
+  { label: "A", raised: false },
+  { label: "W", raised: true },
+  { label: "S", raised: false },
+  { label: "E", raised: true },
+  { label: "D", raised: false },
+  { label: "F", raised: false },
+  { label: "T", raised: true },
+  { label: "G", raised: false },
+  { label: "Y", raised: true },
+  { label: "H", raised: false },
+  { label: "U", raised: true },
+  { label: "J", raised: false },
+  { label: "K", raised: false },
+] as const;
 
 function requestId(): string {
   return crypto.randomUUID();
@@ -194,34 +246,43 @@ export function App() {
   }, [patch?.source?.oscillators?.length, patch?.source?.filter, patch?.effects?.length]);
 
   return (
-    <main className="studio-shell">
-      <header className="topbar">
+    <main className="isolate grid min-h-dvh min-w-80 grid-rows-[auto_1fr_auto] font-studio text-studio-text antialiased [background:radial-gradient(circle_at_70%_-10%,#183a2d_0,transparent_38%),var(--color-studio-canvas)] [font-synthesis:none] [line-height:normal]">
+      <header className="flex h-[4.5rem] items-center justify-between border-b border-studio-border bg-studio-panel/91 px-5 py-[0.8125rem] backdrop-blur-[1.125rem] max-studio-mobile:h-auto">
         <div>
-          <p className="eyebrow">PATCHWAVE</p>
-          <h1>Studio</h1>
+          <p className={eyebrowClass}>PATCHWAVE</p>
+          <h1 className="text-studio-title font-bold tracking-[-0.04em]">Studio</h1>
         </div>
-        <div className="topbar-actions">
-          <button disabled={!document?.canUndo || busy} onClick={() => history("undo")}>
+        <div className="flex items-center gap-2">
+          <StudioButton disabled={!document?.canUndo || busy} onClick={() => history("undo")}>
             Undo
-          </button>
-          <button disabled={!document?.canRedo || busy} onClick={() => history("redo")}>
+          </StudioButton>
+          <StudioButton disabled={!document?.canRedo || busy} onClick={() => history("redo")}>
             Redo
-          </button>
-          <span className={`connection ${connected ? "online" : "offline"}`}>
+          </StudioButton>
+          <span
+            className={cx(
+              statusPillClass,
+              connected ? "text-studio-success" : "text-studio-danger",
+              "max-studio-mobile:hidden",
+            )}
+          >
             {connected ? "Connected" : "Disconnected"}
           </span>
         </div>
       </header>
 
-      <section className="workspace">
-        <aside className="browser-panel">
-          <h2>Devices</h2>
-          <p className="panel-help">Add devices to the serial signal path.</p>
-          <h3>Oscillator</h3>
-          <div className="device-actions">
+      <section className="grid min-h-0 grid-cols-[13.125rem_minmax(18.75rem,1fr)_17.5rem] max-studio-tablet:grid-cols-[10rem_minmax(16.25rem,1fr)] max-studio-mobile:block">
+        <aside className="overflow-auto border-r border-studio-border bg-studio-panel p-studio-panel max-studio-tablet:p-3.25 max-studio-mobile:border-r-0 max-studio-mobile:border-b">
+          <h2 className="text-studio-section font-bold">Devices</h2>
+          <p className={panelHelpClass}>Add devices to the serial signal path.</p>
+          <h3 className="mt-studio-rack mb-2 text-studio-meta font-bold tracking-widest text-studio-text-subtle uppercase">
+            Oscillator
+          </h3>
+          <div className="grid gap-1.5 max-studio-mobile:grid-cols-2">
             {["sine", "triangle", "saw", "pulse", "noise"].map((waveform) => (
-              <button
+              <StudioButton
                 key={waveform}
+                className="text-left capitalize"
                 disabled={
                   busy ||
                   !document?.editableStructure.oscillators ||
@@ -236,30 +297,37 @@ export function App() {
                 }
               >
                 + {waveform}
-              </button>
+              </StudioButton>
             ))}
           </div>
-          <h3>Source</h3>
-          <div className="device-actions">
+          <h3 className="mt-studio-rack mb-2 text-studio-meta font-bold tracking-widest text-studio-text-subtle uppercase">
+            Source
+          </h3>
+          <div className="grid gap-1.5 max-studio-mobile:grid-cols-2">
             {!patch?.source?.filter ? (
-              <button
+              <StudioButton
+                className="text-left capitalize"
                 disabled={busy || !document?.editableStructure.filter}
                 onClick={() => edit({ type: "addFilter" })}
               >
                 + Filter
-              </button>
+              </StudioButton>
             ) : !patch.source.filter.cutoffLfo ? (
-              <button
+              <StudioButton
+                className="text-left capitalize"
                 disabled={busy || !document?.editableStructure.cutoffLfo}
                 onClick={() => edit({ type: "addCutoffLfo" })}
               >
                 + Cutoff LFO
-              </button>
+              </StudioButton>
             ) : null}
           </div>
-          <h3>Effects</h3>
-          <div className="device-actions">
-            <button
+          <h3 className="mt-studio-rack mb-2 text-studio-meta font-bold tracking-widest text-studio-text-subtle uppercase">
+            Effects
+          </h3>
+          <div className="grid gap-1.5 max-studio-mobile:grid-cols-2">
+            <StudioButton
+              className="text-left capitalize"
               disabled={
                 busy || !document?.editableStructure.effects || (patch?.effects?.length ?? 7) >= 7
               }
@@ -268,8 +336,9 @@ export function App() {
               }
             >
               + Saturator
-            </button>
-            <button
+            </StudioButton>
+            <StudioButton
+              className="text-left capitalize"
               disabled={
                 busy || !document?.editableStructure.effects || (patch?.effects?.length ?? 7) >= 7
               }
@@ -278,21 +347,42 @@ export function App() {
               }
             >
               + Stereo delay
-            </button>
+            </StudioButton>
           </div>
         </aside>
 
-        <section className="rack-panel">
-          <div className="rack-heading">
+        <section className="overflow-hidden bg-[linear-gradient(var(--color-studio-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-studio-grid)_1px,transparent_1px)] bg-size-[1.5rem_1.5rem] p-studio-rack max-studio-mobile:p-4">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="eyebrow">SIGNAL PATH</p>
-              <h2>{runtime?.summary ?? "Waiting for patch"}</h2>
+              <p className={eyebrowClass}>SIGNAL PATH</p>
+              <h2 className="mt-1 text-studio-control-size font-medium text-studio-text-panel">
+                {runtime?.summary ?? "Waiting for patch"}
+              </h2>
             </div>
-            <span className={`phase phase-${phase}`}>{phase.replaceAll("-", " ")}</span>
+            <span
+              className={cx(
+                statusPillClass,
+                "bg-studio-phase",
+                phaseToneClasses[phase] ?? "text-studio-text-phase",
+              )}
+            >
+              {phase.replaceAll("-", " ")}
+            </span>
           </div>
-          <div className="rack" aria-label="Serial signal chain">
-            <div className="oscillator-mix" role="group" aria-label="Source oscillator mix">
+          <div
+            className="flex min-h-62.5 items-stretch gap-2.5 overflow-x-auto px-1.5 pt-9 pb-6"
+            aria-label="Serial signal chain"
+          >
+            <div
+              className={cx(
+                "relative flex gap-2 rounded-studio-mix border border-studio-border-mix bg-studio-mix p-2",
+                serialConnectorClass,
+              )}
+              role="group"
+              aria-label="Source oscillator mix"
+            >
               <Device
+                compact
                 title="Oscillator mix"
                 detail={`${patch?.source?.oscillators?.length ?? 0} oscillators · ${format(patch?.source?.frequencyHz)} Hz`}
                 selected={selection.kind === "source"}
@@ -300,6 +390,7 @@ export function App() {
               />
               {(patch?.source?.oscillators ?? []).map((osc: any, index: number) => (
                 <Device
+                  compact
                   key={`osc-${index}`}
                   title={`Oscillator ${index + 1}`}
                   detail={osc.waveform}
@@ -332,6 +423,7 @@ export function App() {
             </div>
             {patch?.source?.filter && (
               <Device
+                connector
                 title="Filter"
                 detail={`${patch.source.filter.mode}${
                   patch.source.filter.cutoffLfo
@@ -343,7 +435,8 @@ export function App() {
                 actions={
                   <>
                     {patch.source.filter.cutoffLfo && (
-                      <button
+                      <StudioButton
+                        size="block"
                         aria-label="Edit cutoff LFO"
                         disabled={busy}
                         onClick={(event) => {
@@ -352,10 +445,11 @@ export function App() {
                         }}
                       >
                         LFO
-                      </button>
+                      </StudioButton>
                     )}
                     {patch.source.filter.cutoffLfo && document?.editableStructure.cutoffLfo && (
-                      <button
+                      <StudioButton
+                        size="block"
                         aria-label="Remove cutoff LFO"
                         disabled={busy}
                         onClick={(event) => {
@@ -364,10 +458,11 @@ export function App() {
                         }}
                       >
                         − LFO
-                      </button>
+                      </StudioButton>
                     )}
                     {document?.editableStructure.filter && (
-                      <button
+                      <StudioButton
+                        size="block"
                         aria-label="Remove filter"
                         disabled={busy}
                         onClick={(event) => {
@@ -376,13 +471,14 @@ export function App() {
                         }}
                       >
                         Remove
-                      </button>
+                      </StudioButton>
                     )}
                   </>
                 }
               />
             )}
             <Device
+              connector
               title="Envelope"
               detail="Amplitude"
               selected={selection.kind === "envelope"}
@@ -390,6 +486,7 @@ export function App() {
             />
             {(patch?.effects ?? []).map((effect: any, index: number) => (
               <Device
+                connector
                 key={`effect-${index}`}
                 title={effect.type === "saturator" ? "Saturator" : "Stereo delay"}
                 detail={`Effect ${index + 1}`}
@@ -428,23 +525,26 @@ export function App() {
           </div>
         </section>
 
-        <aside className="inspector-panel">
-          <h2>Inspector</h2>
-          <p className="panel-help">{selectionLabel(selection)}</p>
+        <aside className="overflow-auto border-l border-studio-border bg-studio-panel p-studio-panel max-studio-tablet:col-span-full max-studio-tablet:max-h-77.5 max-studio-tablet:border-t max-studio-tablet:border-l-0">
+          <h2 className="text-studio-section font-bold">Inspector</h2>
+          <p className={panelHelpClass}>{selectionLabel(selection)}</p>
           {!document?.writable && (
-            <div className="diagnostic">
+            <div className={noteClass}>
               Read-only
               <br />
               {document?.diagnostic}
             </div>
           )}
           {selection.kind === "oscillator" && document?.editableStructure.oscillators && (
-            <label className="parameter">
-              <span className="parameter-label">
+            <label className={parameterClass}>
+              <span className={parameterLabelClass}>
                 <span>Waveform</span>
-                <span className="source-badge literal">structure</span>
+                <span className={cx(sourceBadgeClass, sourceBadgeToneClasses.literal)}>
+                  structure
+                </span>
               </span>
               <select
+                className={nativeSelectClass}
                 disabled={busy}
                 value={patch?.source?.oscillators?.[selection.index!]?.waveform ?? "sine"}
                 onChange={(event) =>
@@ -462,12 +562,15 @@ export function App() {
             </label>
           )}
           {selection.kind === "effect" && document?.editableStructure.effects && (
-            <label className="parameter">
-              <span className="parameter-label">
+            <label className={parameterClass}>
+              <span className={parameterLabelClass}>
                 <span>Effect kind</span>
-                <span className="source-badge literal">structure</span>
+                <span className={cx(sourceBadgeClass, sourceBadgeToneClasses.literal)}>
+                  structure
+                </span>
               </span>
               <select
+                className={nativeSelectClass}
                 disabled={busy}
                 value={patch?.effects?.[selection.index!]?.type ?? "saturator"}
                 onChange={(event) =>
@@ -484,11 +587,11 @@ export function App() {
             </label>
           )}
           {selection.kind === "safety" ? (
-            <p className="computed-note">
+            <p className={noteClass}>
               The safety guard is always active and is not source-editable.
             </p>
           ) : bindings.length === 0 ? (
-            <p className="computed-note">No editable inline fields for this block.</p>
+            <p className={noteClass}>No editable inline fields for this block.</p>
           ) : (
             bindings.map((binding) => (
               <Parameter
@@ -509,28 +612,44 @@ export function App() {
         </aside>
       </section>
 
-      <footer className="performance">
-        <div>
-          <span className="eyebrow">KEYBOARD</span>
-          <strong>{runtime?.keyboard?.activeNoteLabel ?? "—"}</strong>
-          <span>
+      <footer className="grid min-h-24 grid-cols-[13.125rem_1fr_17.5rem] items-center gap-studio-panel border-t border-studio-border bg-studio-panel-subtle px-5 py-3.5 max-studio-tablet:grid-cols-[9.375rem_1fr] max-studio-mobile:block">
+        <div className="grid gap-1">
+          <span className={eyebrowClass}>KEYBOARD</span>
+          <strong className="text-studio-value font-bold tabular-nums">
+            {runtime?.keyboard?.activeNoteLabel ?? "—"}
+          </strong>
+          <span className="text-studio-meta text-studio-text-muted tabular-nums">
             {format(runtime?.keyboard?.voice?.frequencyHz)} Hz · gate{" "}
             {runtime?.keyboard?.voice?.gate ? "open" : "closed"}
           </span>
         </div>
-        <div className="keys" aria-label="Computer keyboard mapping">
-          {["A", "W", "S", "E", "D", "F", "T", "G", "Y", "H", "U", "J", "K"].map((key) => (
-            <kbd key={key}>{key}</kbd>
+        <div
+          className="flex justify-center gap-1.25 overflow-auto max-studio-mobile:my-3.5 max-studio-mobile:justify-start"
+          aria-label="Computer keyboard mapping"
+        >
+          {keyboardKeys.map(({ label, raised }) => (
+            <kbd
+              key={label}
+              className={cx(
+                "min-w-7.75 rounded-studio-key border border-studio-border-key px-1.75 py-3 text-center font-mono text-studio-meta font-bold",
+                raised
+                  ? "-translate-y-1.5 bg-studio-key-dark text-studio-key-dark-text shadow-studio-key-dark"
+                  : "bg-studio-key text-studio-key-text shadow-studio-key",
+              )}
+            >
+              {label}
+            </kbd>
           ))}
         </div>
         <p
           role="status"
           aria-live="polite"
-          className={
+          className={cx(
+            "text-studio-meta leading-[1.4] max-studio-tablet:col-span-full max-studio-mobile:mt-2",
             runtime?.error || document?.phase === "error" || document?.phase === "conflict"
-              ? "error-status"
-              : ""
-          }
+              ? "text-studio-danger"
+              : "text-studio-text-status",
+          )}
         >
           {notice}
         </p>
@@ -546,6 +665,8 @@ function Device({
   onClick,
   actions,
   drag,
+  compact = false,
+  connector = false,
 }: {
   title: string;
   detail: string;
@@ -557,10 +678,19 @@ function Device({
     index: number;
     onMove: (from: number, to: number) => void;
   };
+  compact?: boolean;
+  connector?: boolean;
 }) {
   return (
     <article
-      className={`device ${selected ? "selected" : ""}`}
+      className={cx(
+        "relative min-h-41.25 rounded-studio-device border bg-[linear-gradient(145deg,var(--color-studio-card),var(--color-studio-card-deep))] p-4 outline-none",
+        compact ? "flex-[0_0_8.25rem]" : "flex-[0_0_9.75rem]",
+        selected
+          ? "border-studio-accent-strong shadow-studio-device-selected hover:border-studio-accent-strong [&:has([data-device-select]:focus-visible)]:border-studio-accent-strong"
+          : "border-studio-border-card shadow-studio-device hover:border-studio-border-card-hover [&:has([data-device-select]:focus-visible)]:border-studio-border-card-hover",
+        connector && serialConnectorClass,
+      )}
       draggable={Boolean(drag)}
       onDragStart={(event) => {
         if (!drag) return;
@@ -592,16 +722,19 @@ function Device({
     >
       <button
         type="button"
-        className="device-select"
+        data-device-select
+        className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-inherit focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-studio-accent-strong"
         aria-pressed={selected}
         aria-label={`Edit ${title}`}
         onClick={onClick}
       >
-        <span className="device-led" />
-        <span className="device-title">{title}</span>
-        <span className="device-detail">{detail}</span>
+        <span className="mb-11.25 block size-1.75 rounded-full bg-studio-accent shadow-studio-led" />
+        <span className="block text-studio-control-size font-bold">{title}</span>
+        <span className="mt-1.25 block text-studio-meta leading-[1.4] text-studio-text-muted">
+          {detail}
+        </span>
       </button>
-      {actions && <div className="block-actions">{actions}</div>}
+      {actions && <div className="absolute inset-x-2.25 bottom-2.25 flex gap-1">{actions}</div>}
     </article>
   );
 }
@@ -624,7 +757,8 @@ function BlockActions({
 }) {
   return (
     <>
-      <button
+      <StudioButton
+        size="block"
         aria-label={`Move ${label} left`}
         disabled={disabled || index === 0}
         onClick={(e) => {
@@ -633,8 +767,9 @@ function BlockActions({
         }}
       >
         ←
-      </button>
-      <button
+      </StudioButton>
+      <StudioButton
+        size="block"
         aria-label={`Move ${label} right`}
         disabled={disabled || index === count - 1}
         onClick={(e) => {
@@ -643,8 +778,9 @@ function BlockActions({
         }}
       >
         →
-      </button>
-      <button
+      </StudioButton>
+      <StudioButton
+        size="block"
         aria-label={`Remove ${label}`}
         disabled={disabled || !canRemove}
         onClick={(e) => {
@@ -653,7 +789,7 @@ function BlockActions({
         }}
       >
         Remove
-      </button>
+      </StudioButton>
     </>
   );
 }
@@ -754,15 +890,18 @@ function Parameter({
       gesture.current = undefined;
   };
   return (
-    <div className={`parameter ${computed ? "computed" : ""}`}>
-      <div className="parameter-label" id={labelId}>
+    <div className={parameterClass}>
+      <div className={parameterLabelClass} id={labelId}>
         <span>{binding.control.label}</span>
-        <span className={`source-badge ${binding.sourceForm.kind}`}>{binding.sourceForm.kind}</span>
+        <span className={cx(sourceBadgeClass, sourceBadgeToneClasses[binding.sourceForm.kind])}>
+          {binding.sourceForm.kind}
+        </span>
       </div>
       {binding.control.kind === "number" ? (
         <>
           <input
             id={`${labelId}-slider`}
+            className="w-full appearance-auto accent-studio-accent"
             name={`${controlName}.slider`}
             aria-labelledby={labelId}
             type="range"
@@ -795,9 +934,10 @@ function Parameter({
               if (event.key === "Escape") cancel();
             }}
           />
-          <span className="number-row">
+          <div className="mt-1.5 grid grid-cols-[1fr_auto] items-center gap-2">
             <input
               id={`${labelId}-number`}
+              className="w-full rounded-studio-input border border-studio-border-input bg-studio-control-deep p-1.5 text-studio-text-strong tabular-nums"
               name={`${controlName}.number`}
               aria-labelledby={labelId}
               type="number"
@@ -813,12 +953,13 @@ function Parameter({
                 if (event.key === "Escape") cancel();
               }}
             />
-            <span>{binding.control.unit}</span>
-          </span>
+            <p className="text-studio-caption text-studio-text-subtle">{binding.control.unit}</p>
+          </div>
         </>
       ) : binding.control.kind === "enum" ? (
         <select
           id={`${labelId}-select`}
+          className={nativeSelectClass}
           name={controlName}
           aria-labelledby={labelId}
           disabled={computed || disabled}
@@ -834,6 +975,7 @@ function Parameter({
       ) : (
         <input
           id={`${labelId}-checkbox`}
+          className="appearance-auto"
           name={controlName}
           aria-labelledby={labelId}
           type="checkbox"
@@ -845,20 +987,20 @@ function Parameter({
         />
       )}
       {binding.sourceForm.kind === "computed" ? (
-        <small>
+        <small className="mt-1.75 block leading-[1.4] text-studio-note">
           {binding.sourceForm.message}
           {binding.location
             ? ` · ${binding.location.fileLabel}:${binding.location.line}:${binding.location.column}`
             : ""}
         </small>
       ) : binding.control.defaultValue !== undefined && binding.sourceForm.kind === "literal" ? (
-        <button
-          className="reset"
+        <StudioButton
+          size="reset"
           disabled={disabled}
           onClick={() => onCommit({ type: "resetField", path: binding.path })}
         >
           Reset to default
-        </button>
+        </StudioButton>
       ) : null}
     </div>
   );
