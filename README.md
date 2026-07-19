@@ -251,6 +251,12 @@ pnpm bench:callback     # release callback work-budget benchmark
 pnpm validate:release   # standard validation plus callback benchmark
 ```
 
+### Studio styling
+
+Studio uses Tailwind CSS v4 through the official Vite plugin. `packages/studio/client/src/studio.css` is configuration-only: it imports Tailwind, registers the React TSX source tree, and defines semantic `studio-*` theme tokens and the existing responsive breakpoints. All UI styling belongs in complete, statically detectable utility strings in `packages/studio/client/src/**/*.tsx`; shared utility-only primitives live in `ui.tsx`.
+
+Do not add authored selectors, `@apply`, `@layer`, `@media`, or `@utility` rules to `studio.css`, and do not assemble utility names with string interpolation. Map dynamic UI states to complete class strings instead. Tailwind Preflight is enabled, so form controls must also carry their intentional utility styling. Validate changes with `pnpm --filter @patchwave/studio build` and `pnpm --filter @patchwave/studio test`.
+
 The callback does not allocate, lock, parse, log, block, invoke JavaScript/N-API, or control the stream. Output is sanitized for non-finite values and bounded by a final safety guard.
 
 ## Experimental scope
