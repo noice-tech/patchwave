@@ -15,8 +15,11 @@
   },
   "scripts": {
     "build": "vite build && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "dev": "vite",
-    "test": "vite build && tsx --test test/**/*.test.ts && vitest run"
+    "test": "tsx --test test/**/*.test.ts && vitest run",
+    "fmt": "oxfmt package.json client src test tsconfig.json vite.config.ts",
+    "fmt:check": "oxfmt --check package.json client src test tsconfig.json vite.config.ts"
   },
   "dependencies": {
     "@babel/types": "7.28.4",

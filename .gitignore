@@ -1,5 +1,6 @@
 node_modules/
 packages/*/node_modules/
+.turbo/
 packages/native/target/
 packages/native/*.node
 packages/studio/dist/

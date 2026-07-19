@@ -1,0 +1,79 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": [".node-version", "pnpm-lock.yaml", "rust-toolchain.toml"],
+  "globalEnv": ["CI", "RUNNER_ARCH", "RUNNER_OS"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@patchwave/studio#build": {
+      "dependsOn": ["^build"],
+      "env": ["NODE_ENV", "VITE_*"],
+      "outputs": ["dist/**"]
+    },
+    "@patchwave/native#build": {
+      "dependsOn": ["^build"],
+      "env": [
+        "CARGO_BUILD_TARGET",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CC",
+        "CFLAGS",
+        "CXX",
+        "CXXFLAGS",
+        "MACOSX_DEPLOYMENT_TARGET",
+        "NAPI_RS_CLI_VERSION",
+        "PKG_CONFIG_LIBDIR",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_SYSROOT_DIR",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTC_WRAPPER",
+        "RUSTFLAGS"
+      ],
+      "inputs": ["$TURBO_DEFAULT$", "../../rust-toolchain.toml"],
+      "outputs": ["patchwave-native.*.node"]
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
+    },
+    "//#typecheck:root": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@patchwave/studio#test": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
+    "@patchwave/native#test": {
+      "inputs": ["$TURBO_DEFAULT$", "../../fixtures/**", "../../rust-toolchain.toml"],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "@patchwave/native#lint": {
+      "inputs": ["$TURBO_DEFAULT$", "../../fixtures/**", "../../rust-toolchain.toml"],
+      "outputs": []
+    },
+    "fmt": {
+      "cache": false
+    },
+    "//#fmt:root": {
+      "cache": false
+    },
+    "fmt:check": {
+      "outputs": []
+    },
+    "//#fmt:check:root": {
+      "outputs": []
+    },
+    "bench:callback": {
+      "cache": false,
+      "inputs": ["$TURBO_DEFAULT$", "../../fixtures/**", "../../rust-toolchain.toml"]
+    }
+  }
+}
