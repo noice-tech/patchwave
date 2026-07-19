@@ -1,4 +1,4 @@
-import type { KeyboardAction } from "@patchwave/studio";
+import type { KeyboardAction, PatchFieldPath, PatchScalar } from "@patchwave/studio";
 import type { PatchProgramContext, PatchProgramVoice } from "@patchwave/schema";
 import { CONTROL_FPS, ControlClock, type ControlClockOptions } from "./control-clock.js";
 import {
@@ -9,6 +9,7 @@ import {
   type PatchModule,
 } from "./load-patch.js";
 import { NativeDispatcher, type NativeOperationHandle } from "./native-dispatcher.js";
+import { applyPatchPreview, type PatchPreview } from "./patch-preview.js";
 
 export type PatchRuntimeSnapshot = Readonly<{
   mode: "static" | "program";
@@ -46,6 +47,7 @@ export class PatchRuntime {
     | { resolve: (accepted: boolean) => void; operation?: NativeOperationHandle }
     | undefined;
   #voiceOperations = new Set<NativeOperationHandle>();
+  #preview: PatchPreview | undefined;
   #stopped = false;
 
   constructor(options: PatchRuntimeOptions) {
@@ -73,7 +75,10 @@ export class PatchRuntime {
     this.#stopped = true;
     this.#clock.stop();
     this.#dispatcher.clearSteadyPatch();
+    this.#preview = undefined;
     this.#cancelPendingReload();
+    this.#dispatcher.cancelOperations(this.#voiceOperations);
+    this.#voiceOperations.clear();
     this.#staging = false;
     this.#stagedActions = [];
   }
@@ -90,6 +95,36 @@ export class PatchRuntime {
       error: this.#error,
       backpressure: this.#dispatcher.pendingVoiceOperations,
     });
+  }
+
+  previewField(
+    gestureId: string,
+    baseRevision: string,
+    path: PatchFieldPath,
+    value: PatchScalar,
+  ): boolean {
+    if (this.#stopped || this.#staging) return false;
+    const previous = this.#preview;
+    this.#preview = Object.freeze({ gestureId, baseRevision, path, value });
+    const candidate = this.#currentCandidate(this.#clock.frame());
+    if (!candidate) {
+      this.#preview = previous;
+      return false;
+    }
+    this.#dispatcher.setSteadyPatch(candidate.serialized, () => this.#accept(candidate));
+    this.#onState();
+    return true;
+  }
+
+  cancelPreview(gestureId?: string): boolean {
+    if (!this.#preview || (gestureId && this.#preview.gestureId !== gestureId)) return true;
+    this.#preview = undefined;
+    if (this.#stopped || this.#staging) return true;
+    const candidate = this.#currentCandidate(this.#clock.frame());
+    if (!candidate) return false;
+    this.#dispatcher.setSteadyPatch(candidate.serialized, () => this.#accept(candidate));
+    this.#onState();
+    return true;
   }
 
   handleKeyboard(action: KeyboardAction): boolean {
@@ -120,10 +155,7 @@ export class PatchRuntime {
       return true;
     }
 
-    const candidate =
-      this.#module.kind === "static"
-        ? staticAtFrequency(this.#module.patch, this.#voice.frequencyHz)
-        : this.#evaluate(this.#clock.frame(), this.#module, this.#topology);
+    const candidate = this.#currentCandidate(this.#clock.frame());
     if (!candidate) return false;
     const accepted =
       action.type === "noteOn"
@@ -138,6 +170,7 @@ export class PatchRuntime {
     if (this.#stopped) return;
     this.#voice = frozenVoice({ frequencyHz: this.#voice.frequencyHz, gate: false });
     this.#dispatcher.clearSteadyPatch();
+    this.#preview = undefined;
 
     const reload = this.#pendingReload;
     this.#pendingReload = undefined;
@@ -149,7 +182,11 @@ export class PatchRuntime {
     this.#voiceOperations.clear();
     reload?.resolve(false);
 
+    // Safety release always remains first. The source-derived parameter image follows it
+    // without reopening the gate, so a disconnected static preview cannot linger.
     this.#enqueueNoteOff(() => this.#onState());
+    const source = this.#currentCandidate(this.#clock.frame());
+    if (source) this.#dispatcher.setSteadyPatch(source.serialized, () => this.#accept(source));
     this.#onState();
   }
 
@@ -161,6 +198,18 @@ export class PatchRuntime {
     } catch (error) {
       this.#fail(error);
       return Promise.resolve(false);
+    }
+    try {
+      candidate = applyPatchPreview(candidate.patch, this.#preview);
+    } catch (error) {
+      if (!this.#preview) {
+        this.#fail(error);
+        return Promise.resolve(false);
+      }
+      // The source may validly remove the field currently being previewed. A stale
+      // authoring overlay must never veto that otherwise valid reload.
+      this.#preview = undefined;
+      candidate = evaluatePatchModule(module, context(this.#clock.frame(), this.#voice));
     }
     if (module.kind === "static" && this.#voice.gate) {
       candidate = staticAtFrequency(candidate.patch, this.#voice.frequencyHz);
@@ -277,12 +326,26 @@ export class PatchRuntime {
 
   #evaluate(frame: number, module: PatchModule, expectedTopology: string): LoadedPatch | undefined {
     try {
-      const candidate = evaluatePatchModule(module, context(frame, this.#voice));
+      let candidate = evaluatePatchModule(module, context(frame, this.#voice));
       if (topologyKey(candidate.patch) !== expectedTopology) {
         throw new Error(
           "PatchProgram changed structure; oscillator count, effect count, and ordered effect kinds must remain stable",
         );
       }
+      candidate = applyPatchPreview(candidate.patch, this.#preview);
+      this.#clearError();
+      return candidate;
+    } catch (error) {
+      this.#fail(error);
+      return undefined;
+    }
+  }
+
+  #currentCandidate(frame: number): LoadedPatch | undefined {
+    if (this.#module.kind === "program") return this.#evaluate(frame, this.#module, this.#topology);
+    try {
+      let candidate = applyPatchPreview(this.#module.patch, this.#preview);
+      if (this.#voice.gate) candidate = staticAtFrequency(candidate.patch, this.#voice.frequencyHz);
       this.#clearError();
       return candidate;
     } catch (error) {

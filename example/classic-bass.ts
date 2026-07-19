@@ -11,13 +11,20 @@ export default {
       { waveform: "sine", level: 0.75 },
     ],
     filter: {
-      cutoffHz: 700,
-      resonance: 0.35,
+      mode: "bandpass",
+      cutoffHz: 609,
+      resonance: 0.31,
     },
     ampEnvelope: {
       attackSeconds: 0.005,
       releaseSeconds: 0.18,
     },
   },
-  effects: [{ type: "saturator", driveDb: 12, outputGainDb: -5, mix: 0.55 }],
+  effects: [{ type: "saturator", driveDb: 24.6 }, {
+    type: "stereoDelay",
+    timeSeconds: 0.906,
+    feedback: 0.32,
+    damping: 0.16,
+    mix: 0.25,
+  }],
 } satisfies Patch;

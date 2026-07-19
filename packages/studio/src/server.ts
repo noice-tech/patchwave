@@ -2,19 +2,15 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import { NOTE_CODES } from "./keyboard-state.js";
+import { parseStudioInput } from "./protocol-validate.js";
+import type { StudioInput, StudioServerMessage } from "./protocol.js";
+export type { StudioInput } from "./protocol.js";
 
 const MAX_CLIENT_MESSAGE_BYTES = 4_096;
 const MAX_BUFFERED_BYTES = 65_536;
 const STATE_PUBLISH_INTERVAL_MS = 40;
-const INPUT_CODES = new Set([...Object.keys(NOTE_CODES), "KeyZ", "KeyX"]);
-
-export type StudioInput =
-  | Readonly<{ type: "keyDown" | "keyUp"; code: string }>
-  | Readonly<{ type: "releaseAll" }>;
-
 export type StudioServerOptions = {
-  onInput: (input: StudioInput) => void;
+  onInput: (input: StudioInput) => void | StudioServerMessage | Promise<void | StudioServerMessage>;
   onControllerClosed: () => void;
   getState: () => unknown;
 };
@@ -22,26 +18,15 @@ export type StudioServerOptions = {
 export type StudioServer = {
   url: string;
   publish(state: unknown): void;
+  send(message: StudioServerMessage): void;
   disconnect(): void;
   close(): Promise<void>;
 };
 
-const ASSETS = {
-  "index.html": {
-    type: "text/html; charset=utf-8",
-    url: new URL("../public/index.html", import.meta.url),
-  },
-  "app.js": {
-    type: "text/javascript; charset=utf-8",
-    url: new URL("../public/app.js", import.meta.url),
-  },
-  "styles.css": {
-    type: "text/css; charset=utf-8",
-    url: new URL("../public/styles.css", import.meta.url),
-  },
-} as const;
+type StudioAsset = Readonly<{ type: string; url: URL }>;
 
 export async function startStudioServer(options: StudioServerOptions): Promise<StudioServer> {
+  const assets = await loadStudioAssets();
   const token = randomBytes(24).toString("base64url");
   const basePath = `/session/${token}/`;
   let expectedHost = "";
@@ -63,7 +48,19 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
     controllerReleased = true;
     controller = undefined;
     cancelPendingPublish();
-    options.onControllerClosed();
+    try {
+      options.onControllerClosed();
+    } catch {
+      // Controller authority and safety cleanup must remain fail-closed even if a host callback errs.
+    }
+  };
+  const failSocket = (socket: WebSocket): void => {
+    releaseController(socket);
+    try {
+      socket.terminate();
+    } catch {
+      // Already closed.
+    }
   };
   const flushState = (): void => {
     publishTimer = undefined;
@@ -73,16 +70,11 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
     hasPendingState = false;
     const socket = controller;
     if (!socket || socket.readyState !== WebSocket.OPEN || !shouldPublish) return;
-    if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
-      releaseController(socket);
-      socket.terminate();
-      return;
-    }
-    sendState(socket, state);
+    if (!sendGuarded(socket, { type: "state", state }, MAX_BUFFERED_BYTES)) failSocket(socket);
   };
 
   const server = createServer((request, response) => {
-    void handleHttp(request, response, expectedHost, basePath);
+    void handleHttp(request, response, expectedHost, basePath, assets);
   });
   const webSockets = new WebSocketServer({
     noServer: true,
@@ -123,17 +115,34 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
         socket.terminate();
         return;
       }
-      const input = parseInput(data.toString());
+      const input = parseStudioInput(data.toString());
       if (!input) {
         releaseController(socket);
         socket.terminate();
         return;
       }
-      options.onInput(input);
+      let result: ReturnType<StudioServerOptions["onInput"]>;
+      try {
+        result = options.onInput(input);
+      } catch {
+        failSocket(socket);
+        return;
+      }
+      void Promise.resolve(result)
+        .then((message) => {
+          if (!message || controller !== socket || controllerReleased) return;
+          if (!sendGuarded(socket, message, MAX_BUFFERED_BYTES)) failSocket(socket);
+        })
+        .catch(() => failSocket(socket));
     });
     socket.on("close", () => releaseController(socket));
     socket.on("error", () => releaseController(socket));
-    sendState(socket, options.getState());
+    try {
+      if (!sendGuarded(socket, { type: "state", state: options.getState() }, MAX_BUFFERED_BYTES))
+        failSocket(socket);
+    } catch {
+      failSocket(socket);
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -161,17 +170,30 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
       hasPendingState = true;
       publishTimer ??= setTimeout(flushState, STATE_PUBLISH_INTERVAL_MS);
     },
+    send(message: StudioServerMessage): void {
+      const socket = controller;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      if (!sendGuarded(socket, message, MAX_BUFFERED_BYTES)) failSocket(socket);
+    },
     disconnect(): void {
       const socket = controller;
       if (!socket) return;
       releaseController(socket);
-      socket.close(1008, "Session reset");
+      try {
+        socket.close(1008, "Session reset");
+      } catch {
+        failSocket(socket);
+      }
     },
     async close(): Promise<void> {
       const socket = controller;
       if (socket) {
         releaseController(socket);
-        socket.close(1001, "Server shutting down");
+        try {
+          socket.close(1001, "Server shutting down");
+        } catch {
+          failSocket(socket);
+        }
       } else {
         cancelPendingPublish();
       }
@@ -182,11 +204,60 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
   };
 }
 
+async function loadStudioAssets(): Promise<ReadonlyMap<string, StudioAsset>> {
+  const root = new URL("../dist/client/", import.meta.url);
+  const manifestValue: unknown = JSON.parse(
+    await readFile(new URL(".vite/manifest.json", root), "utf8"),
+  );
+  if (!isRecord(manifestValue)) throw new Error("Studio Vite manifest is invalid");
+  const allowed = new Set<string>(["index.html"]);
+  for (const entry of Object.values(manifestValue)) {
+    if (!isRecord(entry) || typeof entry.file !== "string")
+      throw new Error("Studio Vite manifest entry is invalid");
+    allowed.add(validAssetPath(entry.file));
+    for (const key of ["css", "assets"] as const) {
+      const values = entry[key];
+      if (values === undefined) continue;
+      if (!Array.isArray(values) || values.some((value) => typeof value !== "string"))
+        throw new Error("Studio Vite manifest asset list is invalid");
+      for (const value of values as string[]) allowed.add(validAssetPath(value));
+    }
+  }
+  const assets = new Map<string, StudioAsset>();
+  for (const relative of allowed) {
+    const url = new URL(relative, root);
+    await readFile(url);
+    assets.set(relative, { type: assetType(relative), url });
+  }
+  return assets;
+}
+
+function validAssetPath(path: string): string {
+  if (
+    path.length === 0 ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  )
+    throw new Error("Studio Vite manifest contains an unsafe asset path");
+  return path;
+}
+
+function assetType(path: string): string {
+  if (path.endsWith(".html")) return "text/html; charset=utf-8";
+  if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (path.endsWith(".css")) return "text/css; charset=utf-8";
+  if (path.endsWith(".svg")) return "image/svg+xml";
+  if (path.endsWith(".json")) return "application/json; charset=utf-8";
+  return "application/octet-stream";
+}
+
 async function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
   expectedHost: string,
   basePath: string,
+  assets: ReadonlyMap<string, StudioAsset>,
 ): Promise<void> {
   setSecurityHeaders(response);
   if (request.method !== "GET" || request.headers.host !== expectedHost) {
@@ -196,12 +267,12 @@ async function handleHttp(
   const isIndex = request.url === basePath;
   const relative = isIndex ? "index.html" : request.url?.slice(basePath.length);
   const expectedUrl = isIndex ? basePath : `${basePath}${relative ?? ""}`;
-  if (!relative || !(relative in ASSETS) || request.url !== expectedUrl) {
+  if (!relative || !assets.has(relative) || request.url !== expectedUrl) {
     response.writeHead(404).end("Not found");
     return;
   }
   try {
-    const asset = ASSETS[relative as keyof typeof ASSETS];
+    const asset = assets.get(relative)!;
     const body = await readFile(asset.url);
     response.writeHead(200, {
       "Content-Type": asset.type,
@@ -227,37 +298,21 @@ function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader("X-Frame-Options", "DENY");
 }
 
-function parseInput(serialized: string): StudioInput | undefined {
-  let value: unknown;
+function sendGuarded(socket: WebSocket, message: StudioServerMessage, maxBytes: number): boolean {
   try {
-    value = JSON.parse(serialized);
+    if (socket.readyState !== WebSocket.OPEN) return false;
+    const serialized = JSON.stringify(message);
+    const bytes = Buffer.byteLength(serialized, "utf8");
+    if (bytes > maxBytes || socket.bufferedAmount + bytes > maxBytes) return false;
+    socket.send(serialized);
+    return true;
   } catch {
-    return undefined;
+    return false;
   }
-  if (!isRecord(value) || typeof value.type !== "string") return undefined;
-  if (value.type === "releaseAll" && exactKeys(value, ["type"])) return { type: "releaseAll" };
-  if (
-    (value.type === "keyDown" || value.type === "keyUp") &&
-    exactKeys(value, ["code", "type"]) &&
-    typeof value.code === "string" &&
-    INPUT_CODES.has(value.code)
-  ) {
-    return { type: value.type, code: value.code };
-  }
-  return undefined;
-}
-
-function exactKeys(value: Record<string, unknown>, expected: string[]): boolean {
-  const actual = Object.keys(value).sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sendState(socket: WebSocket, state: unknown): void {
-  socket.send(JSON.stringify({ type: "state", state }));
 }
 
 function closeHttpServer(server: ReturnType<typeof createServer>): Promise<void> {

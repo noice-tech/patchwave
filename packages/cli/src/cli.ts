@@ -5,6 +5,7 @@ import {
   KeyboardState,
   startStudioServer,
   type StudioInput,
+  type StudioKeyboardInput,
   type StudioServer,
   type StudioServerOptions,
 } from "@patchwave/studio";
@@ -12,6 +13,7 @@ import chokidar from "chokidar";
 import { loadPatchModule, type PatchModule } from "./load-patch.js";
 import { NativeDispatcher, type RuntimeAudioEngine } from "./native-dispatcher.js";
 import { PatchRuntime } from "./patch-runtime.js";
+import { StudioDocumentController } from "./studio-document.js";
 
 const RELOAD_DEBOUNCE_MS = 100;
 const RUNTIME_ERROR_POLL_MS = 250;
@@ -72,6 +74,7 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
   let studio: StudioServer | undefined;
   let dispatcher: NativeDispatcher | undefined;
   let runtime: PatchRuntime | undefined;
+  let document: StudioDocumentController | undefined;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let runtimeErrorTimer: ReturnType<typeof setInterval> | undefined;
   let signalHandlersInstalled = false;
@@ -79,6 +82,7 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
   let exitCode = 0;
   let reloadRunning = false;
   let reloadQueued = false;
+  let reliableDocumentKey = "";
   const keyboard = new KeyboardState();
   let resolveShutdown: () => void = () => undefined;
   const shutdownPromise = new Promise<void>((resolvePromise) => {
@@ -98,8 +102,21 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
   };
   const handleSigint = (): void => requestShutdown(0);
   const handleSigterm = (): void => requestShutdown(0);
-  const state = (): unknown => ({ ...runtime?.snapshot(), keyboard: keyboard.snapshot() });
+  const state = (): unknown => ({
+    ...runtime?.snapshot(),
+    keyboard: keyboard.snapshot(),
+    document: document?.snapshot(),
+  });
   const publish = (): void => studio?.publish(state());
+  const publishDocument = (): void => {
+    publish();
+    const snapshot = document?.snapshot();
+    if (!snapshot) return;
+    const key = `${snapshot.revision}|${snapshot.phase}|${snapshot.canUndo}|${snapshot.canRedo}|${snapshot.diagnostic ?? ""}`;
+    if (key === reliableDocumentKey) return;
+    reliableDocumentKey = key;
+    studio?.send({ type: "document", protocol: 1, document: snapshot });
+  };
   const releaseAll = (): void => {
     keyboard.releaseAll();
     runtime?.releaseVoice();
@@ -146,6 +163,15 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
       onProgramError: (message) => logger.error(`Patch program: ${message}`),
     });
 
+    document = await StudioDocumentController.create({
+      path: configPath,
+      getCanonical: () => runtime!.snapshot().patch,
+      preview: (input) =>
+        runtime!.previewField(input.gestureId, input.baseRevision, input.path, input.value),
+      cancelPreview: (gestureId) => runtime!.cancelPreview(gestureId),
+      onChange: publishDocument,
+    });
+
     try {
       activeEngine.start();
     } catch (error) {
@@ -155,6 +181,7 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
     studio = await createStudio({
       onInput: (input) => {
         if (shutdownRequested) return;
+        if (isEditInput(input)) return document!.handle(input);
         const action = applyStudioInput(keyboard, input);
         if (!runtime?.handleKeyboard(action)) {
           logger.error("Studio input could not be applied; releasing the voice.");
@@ -163,7 +190,10 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
         }
         publish();
       },
-      onControllerClosed: releaseAll,
+      onControllerClosed: () => {
+        document?.cancelAllPreviews();
+        releaseAll();
+      },
       getState: state,
     });
 
@@ -173,15 +203,38 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
       try {
         do {
           reloadQueued = false;
+          let loadedRevision: string | undefined;
           try {
+            loadedRevision = await document!.currentRevision().catch(() => undefined);
+            const trackRevision = loadedRevision !== undefined;
+            if (trackRevision) document?.markReloading();
             const candidate = await load(configPath);
             if (shutdownRequested) return;
-            if (await runtime!.stageReload(candidate)) {
+            if (trackRevision) {
+              const revisionAfterLoad = await document!.currentRevision();
+              if (revisionAfterLoad !== loadedRevision) {
+                reloadQueued = true;
+                continue;
+              }
+            }
+            const accepted = await runtime!.stageReload(candidate);
+            if (trackRevision) {
+              const stillCurrent = await document!.refreshAfterReload(accepted, loadedRevision!);
+              if (!stillCurrent) {
+                reloadQueued = true;
+                continue;
+              }
+            }
+            if (accepted) {
               logger.log(`Reloaded ${candidate.kind} patch at frame ${runtime!.snapshot().frame}`);
             } else {
               logger.error("Patch reload was rejected. Keeping the previous patch program.");
             }
           } catch (error) {
+            const currentRevision = document!.snapshot().writable
+              ? await document!.currentRevision().catch(() => loadedRevision)
+              : undefined;
+            if (currentRevision) await document!.refreshAfterReload(false, currentRevision);
             logger.error(
               `Patch reload failed: ${errorMessage(error)}. Keeping the previous patch program.`,
             );
@@ -243,7 +296,9 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
   } finally {
     if (debounceTimer) clearTimeout(debounceTimer);
     if (runtimeErrorTimer) clearInterval(runtimeErrorTimer);
+    document?.cancelAllPreviews();
     releaseAll();
+    await document?.drain();
     runtime?.stop();
     if (studio) {
       try {
@@ -278,7 +333,11 @@ export async function runCli(dependencies: RunCliDependencies): Promise<number> 
   return exitCode;
 }
 
-function applyStudioInput(keyboard: KeyboardState, input: StudioInput) {
+function isEditInput(input: StudioInput): input is Exclude<StudioInput, StudioKeyboardInput> {
+  return !["keyDown", "keyUp", "releaseAll"].includes(input.type);
+}
+
+function applyStudioInput(keyboard: KeyboardState, input: StudioKeyboardInput) {
   switch (input.type) {
     case "keyDown":
       return keyboard.keyDown(input.code);

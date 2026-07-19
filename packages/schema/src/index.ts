@@ -1,3 +1,4 @@
+export { PATCH_EDITOR, type PatchEditorControl } from "./editor.js";
 export { EFFECT_COUNT_MAX, LIMITS, OSCILLATOR_COUNT_MAX, PATCH_JSON_MAX_BYTES } from "./limits.js";
 export type {
   CutoffLfo,

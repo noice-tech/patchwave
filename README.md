@@ -77,7 +77,30 @@ Patch programs are control-rate automation: JavaScript never runs in the audio c
 
 ## Studio
 
-Studio binds only to loopback with a random per-process capability URL. It visualizes the current signal chain, canonical values, program time, voice, and runtime status. It does not read or rewrite source files and exposes no patch editor or remote hosting surface.
+Studio binds only to loopback with a random per-process capability URL. Its React interface combines the playable keyboard with an Ableton-style serial device rack, device browser, and inspector. Supported edits are written back to the one TypeScript entry file passed to the CLI; Studio is never a remote hosting surface and the browser cannot choose a path or send source code.
+
+Literal scalar controls preview the sound while you drag. Releasing the pointer, pressing Enter, or leaving the input commits one validated source edit and creates one process-local undo entry. Adding, removing, replacing, or reordering oscillator/filter/LFO/effect blocks commits immediately. Studio compares source content and file identity immediately before an atomic replacement and verifies the result, so ordinary stale edits fail with a visible conflict. Portable filesystems do not provide an indivisible content-hash-and-replace primitive; a truly simultaneous external rename in the final replacement interval can still race, so avoid saving from an editor during the instant Studio commits.
+
+### Editable TypeScript
+
+Studio deliberately understands a small source grammar rather than guessing at arbitrary TypeScript:
+
+- A static patch must be a directly default-exported object literal, optionally wrapped in `satisfies`, `as`, or parentheses.
+- A `PatchProgram` may return one direct object literal, either as a concise arrow body or one function-scope `return`. Local statements before that return are allowed.
+- Direct literal numbers, strings, booleans, objects, and dense arrays are editable. Missing optional literal fields appear as defaults and materialize only when changed.
+- Variables, calls, arithmetic, conditional values, spreads, computed keys, imported patch objects, and indirect exports remain audible and visible but are marked **Computed** and read-only with a source location.
+- Studio only rewrites the entry file. Symbolic links and non-`.ts`/`.tsx` entry files are playback-only.
+
+For example, `resonance` is editable while the authored cutoff animation remains code-only:
+
+```ts
+filter: {
+  cutoffHz: 200 + movement * 2_400, // Computed in code
+  resonance: 0.45,                  // Editable literal
+}
+```
+
+Undo and redo exist only for Studio transactions in the current process. An external file change clears affected Studio history rather than risking a snapshot overwrite. Disconnect invalidates queued browser edits; an atomic commit that has already begun is allowed to finish and shutdown drains it. Invalid external saves continue to retain the previous valid sound through the normal hot-reload behavior.
 
 Use physical computer-key positions:
 
@@ -92,7 +115,7 @@ Use physical computer-key positions:
 
 `A` begins at Ableton's displayed `C3`. New notes retrigger the envelope and filter LFO. Patchwave uses last-pressed priority: releasing the active key falls back to the most recently held key without retriggering, and releasing the final key starts the amplitude release. Leaving, hiding, or disconnecting the studio safely releases all notes. Velocity is not yet modeled.
 
-Static patches become playable through a transient runtime frequency copy; the TypeScript file is never changed. Patch programs control their returned pitch directly, so use `voice.frequencyHz` when keyboard pitch should drive the source.
+Keyboard performance never rewrites pitch into source: static patches use a transient runtime frequency copy. Patch programs control their returned pitch directly, so use `voice.frequencyHz` when keyboard pitch should drive the source. Studio parameter edits are a separate, explicit source transaction; a held keyboard note is never persisted as the authored `frequencyHz`.
 
 ## Source
 

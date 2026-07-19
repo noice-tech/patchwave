@@ -80,6 +80,7 @@ class FakeStudio implements StudioServer {
   publish(state: unknown): void {
     this.states.push(state);
   }
+  send(): void {}
   disconnect(): void {
     this.disconnected = true;
   }
@@ -208,6 +209,8 @@ test("controller close cancels a backpressured reload and staged note before saf
   harness.studioOptions!.onControllerClosed();
   engine.accept = true;
   await waitUntil(() => engine.accepted.includes("off"));
+  harness.signals.emit("SIGTERM");
+  assert.equal(await harness.promise, 0);
 
   assert.equal(engine.noteOns.length, 0);
   assert.equal(
@@ -218,10 +221,14 @@ test("controller close cancels a backpressured reload and staged note before saf
     ),
     false,
   );
-  assert.equal(engine.accepted.at(-1), "off");
-
-  harness.signals.emit("SIGTERM");
-  assert.equal(await harness.promise, 0);
+  const offIndex = engine.accepted.indexOf("off");
+  const restoredIndex = engine.accepted.findIndex(
+    (call, index) =>
+      index > offIndex &&
+      call.startsWith("update:") &&
+      JSON.parse(call.slice("update:".length)).source.frequencyHz === 110,
+  );
+  assert.ok(offIndex >= 0 && restoredIndex > offIndex);
 });
 
 test("runtime-error polling reports failure and shuts down", async () => {
