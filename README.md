@@ -2,6 +2,8 @@
 
 Patchwave is a small, code-first monophonic synthesizer. Write a TypeScript patch object or a frame-driven patch program, save it, and hear every valid change immediately through a realtime Rust DSP engine.
 
+> **⚠️ Active development:** Patchwave is experimental and macOS-first. Its schemas, concepts, source-editing model, wire formats, and public APIs may change—including breaking changes—without compatibility guarantees at this stage.
+
 ```text
 oscillator mix
       │
