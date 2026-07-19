@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
+    "fmt": "oxfmt package.json src test tsconfig.json",
+    "fmt:check": "oxfmt --check package.json src test tsconfig.json",
     "patchwave": "tsx src/index.ts"
   },
   "dependencies": {
